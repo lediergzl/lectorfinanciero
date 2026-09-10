@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Lector de Transferencias</title>
+  <link rel="stylesheet" href="/src/ui/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <h1>Lector de Transferencias</h1>
+    </header>
+
+    <section id="permission-screen" class="screen hidden">
+      <p>Para funcionar, la app necesita leer tus SMS de transferencias.</p>
+      <button id="btn-request-permissions">Conceder permisos</button>
+    </section>
+
+    <section id="main-screen" class="screen hidden">
+      <div class="month-nav">
+        <button id="btn-prev-month">◀</button>
+        <span id="current-month-label">—</span>
+        <button id="btn-next-month">▶</button>
+      </div>
+
+      <div class="summary-card">
+        <div class="summary-row"><span>Ingresos</span><strong id="sum-in">0</strong></div>
+        <div class="summary-row"><span>Gastos</span><strong id="sum-out">0</strong></div>
+        <div class="summary-row balance"><span>Balance</span><strong id="sum-balance">0</strong></div>
+      </div>
+
+      <h2>Por persona</h2>
+      <ul id="contact-list" class="list"></ul>
+
+      <button id="btn-refresh" class="secondary">Actualizar (leer SMS nuevos)</button>
+    </section>
+
+    <!-- Diálogo modal: "¿Quién es?" -->
+    <div id="who-is-modal" class="modal hidden">
+      <div class="modal-content">
+        <h3>Nueva transferencia detectada</h3>
+        <p id="who-is-details"></p>
+        <div class="quick-options" id="quick-options">
+          <button data-cat="Familiar">👤 Familiar</button>
+          <button data-cat="Amigo">🧑‍🤝‍🧑 Amigo</button>
+          <button data-cat="Negocio">🏪 Negocio</button>
+          <button data-cat="Cliente">💼 Cliente</button>
+        </div>
+        <input id="who-is-name" type="text" placeholder="Nombre (ej. María)" />
+        <button id="btn-save-contact">Guardar</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

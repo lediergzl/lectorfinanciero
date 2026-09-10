@@ -1,0 +1,22 @@
+{
+  "name": "lector-transferencias",
+  "version": "0.1.0",
+  "description": "Lector y clasificador automático de transferencias bancarias vía SMS (Transfermóvil, EnZona, etc.)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "cap:sync": "npx cap sync android",
+    "cap:open": "npx cap open android",
+    "cap:run": "npx cap run android"
+  },
+  "dependencies": {
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/android": "^6.1.2",
+    "@capacitor-community/sqlite": "^6.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2",
+    "vite": "^5.4.2"
+  }
+}

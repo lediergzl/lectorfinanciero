@@ -1,0 +1,21 @@
+<!--
+  Fragmento a insertar en android/app/src/main/AndroidManifest.xml
+  después de `npx cap add android`.
+
+  1) Los permisos van como hijos directos de <manifest>.
+  2) El <receiver> va dentro de <application>.
+-->
+
+<!-- ── Permisos (fuera de <application>) ── -->
+<uses-permission android:name="android.permission.RECEIVE_SMS" />
+<uses-permission android:name="android.permission.READ_SMS" />
+
+<!-- ── Dentro de <application> ── -->
+<receiver
+    android:name="com.lectortransferencias.sms.IncomingSmsReceiver"
+    android:exported="true"
+    android:permission="android.permission.BROADCAST_SMS">
+    <intent-filter android:priority="999">
+        <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+    </intent-filter>
+</receiver>

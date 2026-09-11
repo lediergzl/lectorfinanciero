@@ -18,11 +18,24 @@ export function renderMonthLabel(year, month) {
     `${MONTH_NAMES[month - 1]} ${year}`;
 }
 
-/**
- * summary = { totals: [{type, total, currency}], byContact: [...] }
- * Simplificamos asumiendo una moneda principal (CUP) para los totales
- * del encabezado; el desglose por persona sí respeta cada moneda.
- */
+export function showLoader(message = 'Indexando transferencias…') {
+  let el = document.getElementById('global-loader');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'global-loader';
+    el.className = 'loader-overlay hidden';
+    el.innerHTML = '<div class="loader-box"><div class="spinner"></div><p class="loader-text"></p></div>';
+    document.body.appendChild(el);
+  }
+  el.querySelector('.loader-text').textContent = message;
+  el.classList.remove('hidden');
+}
+
+export function hideLoader() {
+  const el = document.getElementById('global-loader');
+  if (el) el.classList.add('hidden');
+}
+
 export function renderSummary(summary) {
   const totalIn = summary.totals
     .filter((t) => t.type === 'in' && t.currency === 'CUP')
@@ -55,12 +68,6 @@ export function renderSummary(summary) {
   }
 }
 
-/**
- * Requisito: "permite cambiar de dark a claro". El tema ya se aplicó
- * de forma síncrona en index.html (antes de pintar, vía localStorage)
- * para evitar parpadeos; aquí solo conectamos el botón para alternarlo
- * y persistir la elección.
- */
 export function initThemeToggle() {
   const btn = document.getElementById('btn-theme-toggle');
   if (!btn) return;
@@ -82,10 +89,6 @@ export function initThemeToggle() {
   };
 }
 
-/**
- * Requisito: "ajustes con fecha de inicio de indexado". Se reutiliza el
- * mismo modal de ajustes existente, añadiendo el campo de fecha.
- */
 export function showSettingsModal(currentSettings, onSave, options = {}) {
   const { forceChoice = false } = options;
   const modal = document.getElementById('settings-modal');
@@ -102,11 +105,6 @@ export function showSettingsModal(currentSettings, onSave, options = {}) {
   categoryInput.value = currentSettings.category || 'Negocio';
   if (indexSinceInput) indexSinceInput.value = currentSettings.indexSinceDate || '';
 
-  // Requisito: "al cargar la apk por primera vez no debemos indexar
-  // nada; primero se muestra la configuración para que el usuario
-  // elija a partir de cuándo quiere indexar". En ese caso el modal se
-  // muestra sin botón de cerrar (obligatorio guardar para continuar)
-  // y con un aviso explicando por qué aparece.
   if (onboardingNotice) onboardingNotice.classList.toggle('hidden', !forceChoice);
   if (closeBtn) closeBtn.classList.toggle('hidden', forceChoice);
   saveBtn.textContent = forceChoice ? 'Empezar a indexar' : 'Guardar ajustes';
@@ -127,12 +125,6 @@ export function showSettingsModal(currentSettings, onSave, options = {}) {
   }
 }
 
-/**
- * Requisito: "se necesita poder crear un grupo y anclar usuarios a el
- * y que te de las estadisticas de ese grupo". Pinta la lista de grupos
- * en la pantalla principal; cada fila se puede tocar para ver sus
- * estadísticas o borrar el grupo.
- */
 export function renderGroupsList(groups, onOpenGroup, onDeleteGroup) {
   const list = document.getElementById('groups-list');
   list.innerHTML = '';
@@ -157,7 +149,6 @@ export function renderGroupsList(groups, onOpenGroup, onDeleteGroup) {
   }
 }
 
-/** Modal simple para pedir el nombre de un grupo nuevo. */
 export function showNewGroupModal(onCreate) {
   const modal = document.getElementById('new-group-modal');
   const input = document.getElementById('new-group-name');
@@ -175,10 +166,6 @@ export function showNewGroupModal(onCreate) {
   document.getElementById('btn-close-new-group').onclick = () => modal.classList.add('hidden');
 }
 
-/**
- * Muestra las estadísticas de un grupo (mismo formato que el resumen
- * principal, pero solo con los miembros de ese grupo).
- */
 export function showGroupStatsModal(group, summary, monthLabel) {
   const modal = document.getElementById('group-stats-modal');
   document.getElementById('group-stats-title').textContent = `${group.name} · ${monthLabel}`;
@@ -215,11 +202,6 @@ export function showGroupStatsModal(group, summary, monthLabel) {
   document.getElementById('btn-close-group-stats').onclick = () => modal.classList.add('hidden');
 }
 
-/**
- * Pantalla de gestión de contactos: lista cada persona con cuántas
- * tarjetas tiene y a qué grupo pertenece, con un selector para
- * cambiarlo de grupo.
- */
 export function showContactsModal(contacts, groups, onAssignGroup) {
   const modal = document.getElementById('contacts-modal');
   const list = document.getElementById('contacts-list');
@@ -253,11 +235,6 @@ export function showContactsModal(contacts, groups, onAssignGroup) {
   document.getElementById('btn-close-contacts').onclick = () => modal.classList.add('hidden');
 }
 
-/**
- * Actualiza el contador visible en el botón "Pendientes" de la
- * pantalla principal (total de transferencias sin etiquetar, de
- * cualquier día — la pantalla detallada sí se limita a un día a la vez).
- */
 export function renderPendingBadge(count) {
   const badge = document.getElementById('pending-badge');
   if (badge) badge.textContent = String(count);
@@ -265,34 +242,43 @@ export function renderPendingBadge(count) {
   if (btn) btn.classList.toggle('has-pending', count > 0);
 }
 
-/**
- * Requisito: "puede darse el caso q el usuario no tenga tiempo para
- * etiquetarlas todas asi q debe podese mostrar en un apartado y valla
- * etiquetandola segun pueda" + "solo debe mostrarse en la pantalla las
- * transferencias del dia y un paginador por si son muchas".
- *
- * Muestra, para UN día concreto (elegible con el selector de fecha),
- * una página a la vez de las transferencias sin etiquetar de ese día.
- * Cada fila tiene un botón "Etiquetar" que abre el modal "¿Quién es?"
- * solo para esa transferencia — el usuario puede cerrar esta pantalla
- * en cualquier momento y volver luego a seguir etiquetando.
- */
-export function showPendingModal({ dateStr, items, page, totalPages, totalForDay, totalOverall }, callbacks) {
+export function showPendingModal({ year, month, dayCounts, selectedDate, items, page, totalPages, totalForDay, totalOverall }, callbacks) {
   const modal = document.getElementById('pending-modal');
-  const dayInput = document.getElementById('pending-day-input');
+  const monthLabel = document.getElementById('pending-month-label');
+  const chips = document.getElementById('pending-day-chips');
   const summary = document.getElementById('pending-day-summary');
   const list = document.getElementById('pending-list');
   const pageLabel = document.getElementById('pending-page-label');
   const prevBtn = document.getElementById('btn-pending-prev');
   const nextBtn = document.getElementById('btn-pending-next');
 
-  dayInput.value = dateStr;
-  dayInput.onchange = () => callbacks.onChangeDay(dayInput.value);
+  monthLabel.textContent = `${MONTH_NAMES[month - 1]} ${year}`;
+  document.getElementById('pending-prev-month').onclick = () => callbacks.onPrevMonth();
+  document.getElementById('pending-next-month').onclick = () => callbacks.onNextMonth();
 
-  const [y, m, d] = dateStr.split('-');
-  summary.textContent = totalForDay
-    ? `${totalForDay} transferencia${totalForDay === 1 ? '' : 's'} sin etiquetar el ${d}/${m}/${y} (${totalOverall} en total, todos los días).`
-    : `No hay transferencias sin etiquetar el ${d}/${m}/${y}. Pendientes en total: ${totalOverall}.`;
+  chips.innerHTML = '';
+  const days = Object.keys(dayCounts).sort();
+  if (!days.length) {
+    chips.innerHTML = '<p class="hint-text">Sin pendientes este mes.</p>';
+  } else {
+    for (const d of days) {
+      const btn = document.createElement('button');
+      btn.textContent = `${d.split('-')[2]} (${dayCounts[d]})`;
+      if (d === selectedDate) btn.classList.add('active-chip');
+      btn.onclick = () => callbacks.onSelectDay(d);
+      chips.appendChild(btn);
+    }
+  }
+
+  if (selectedDate) {
+    const [y, m, d] = selectedDate.split('-');
+    summary.textContent = totalForDay
+      ? `${totalForDay} transferencia${totalForDay === 1 ? '' : 's'} sin etiquetar el ${d}/${m}/${y}. `
+      : `No hay transferencias sin etiquetar el ${d}/${m}/${y}. `;
+  } else {
+    summary.textContent = 'Selecciona un día con pendientes. ';
+  }
+  summary.textContent += `(${totalOverall} pendientes en total, todos los meses.)`;
 
   list.innerHTML = '';
   if (!items.length) {
@@ -322,17 +308,63 @@ export function showPendingModal({ dateStr, items, page, totalPages, totalForDay
   document.getElementById('btn-close-pending').onclick = () => modal.classList.add('hidden');
 }
 
+export function showReclassifyModal(transactions, contacts, callbacks) {
+  const modal = document.getElementById('reclassify-modal');
+  const list = document.getElementById('reclassify-list');
+  list.innerHTML = '';
+
+  if (!transactions.length) {
+    list.innerHTML = '<li>No hay transacciones en la categoría única.</li>';
+  } else {
+    for (const t of transactions) {
+      const li = document.createElement('li');
+      li.style.cssText = 'flex-direction:column;align-items:stretch;gap:8px;';
+      const amountClass = t.type === 'in' ? 'amount-in' : 'amount-out';
+      const sign = t.type === 'in' ? '+' : '−';
+      const options = ['<option value="">Elegir contacto…</option>']
+        .concat(contacts.map((c) => `<option value="${c.id}">${c.alias}</option>`))
+        .join('');
+      li.innerHTML = `
+        <div style="display:flex;justify-content:space-between;">
+          <span>${t.identifier} <small style="color:var(--text-faint)">${new Date(t.date).toLocaleDateString('es-CU')}</small></span>
+          <span class="${amountClass}">${sign} ${formatMoney(t.amount, t.currency)}</span>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <select class="reclassify-select" style="flex:1;margin-bottom:0;">${options}</select>
+          <button class="tiny-btn" data-action="assign">Asignar</button>
+          <button class="tiny-btn" data-action="new">+ Nuevo</button>
+        </div>
+      `;
+      li.querySelector('[data-action="assign"]').onclick = () => {
+        const contactId = Number(li.querySelector('.reclassify-select').value);
+        if (!contactId) return;
+        callbacks.onAssign(t.id, contactId);
+      };
+      li.querySelector('[data-action="new"]').onclick = () => {
+        const alias = prompt('Nombre del nuevo contacto:');
+        if (!alias || !alias.trim()) return;
+        callbacks.onAssignNew(t.id, alias.trim());
+      };
+      list.appendChild(li);
+    }
+  }
+
+  modal.classList.remove('hidden');
+  document.getElementById('btn-close-reclassify').onclick = () => modal.classList.add('hidden');
+}
+
 export function showScreen(id) {
   document.querySelectorAll('.screen').forEach((el) => el.classList.add('hidden'));
   document.getElementById(id).classList.remove('hidden');
 }
 
-export function showWhoIsModal({ identifier, identifierType, amount, currency, date, type }, existingContacts, onSaveNew, onAssociateExisting, onSkipOnce, onSkipForever) {
+export function showWhoIsModal({ identifier, identifierType, amount, currency, date, type }, existingContacts, groups, onSaveNew, onAssociateExisting, onSkipOnce, onSkipForever) {
   const modal = document.getElementById('who-is-modal');
   const details = document.getElementById('who-is-details');
   const directionLabel = document.getElementById('who-is-direction');
   const nameInput = document.getElementById('who-is-name');
   const saveBtn = document.getElementById('btn-save-contact');
+  const groupSelect = document.getElementById('who-is-group-select');
   const existingSelect = document.getElementById('who-is-existing-select');
   const associateBtn = document.getElementById('btn-associate-existing');
   const associateRow = document.getElementById('who-is-associate-row');
@@ -344,8 +376,6 @@ export function showWhoIsModal({ identifier, identifierType, amount, currency, d
   details.textContent =
     `${label} · ${formatMoney(amount, currency)} · ${new Date(date).toLocaleDateString('es-CU')}`;
 
-  // Aclara si es una transferencia ENTRANTE (te la hacen a ti) o
-  // SALIENTE (la haces tú), para que quede claro qué se está guardando.
   if (directionLabel) {
     directionLabel.textContent = type === 'in'
       ? '⬇ Entrante (te la hicieron a ti)'
@@ -356,6 +386,7 @@ export function showWhoIsModal({ identifier, identifierType, amount, currency, d
   }
 
   nameInput.value = '';
+  if (groupSelect) groupSelect.value = '';
   modal.classList.remove('hidden');
 
   let selectedCategory = null;
@@ -363,20 +394,24 @@ export function showWhoIsModal({ identifier, identifierType, amount, currency, d
     btn.onclick = () => {
       selectedCategory = btn.dataset.cat;
       if (!nameInput.value) nameInput.value = btn.dataset.cat;
+      quickButtons.forEach((other) => other.classList.toggle('active-chip', other === btn));
     };
   });
+
+  if (groupSelect) {
+    groupSelect.innerHTML = ['<option value="">Sin grupo</option>']
+      .concat((groups || []).map((g) => `<option value="${g.id}">${g.name}</option>`))
+      .join('');
+  }
 
   saveBtn.onclick = () => {
     const alias = nameInput.value.trim();
     if (!alias) return;
+    const groupId = groupSelect && groupSelect.value ? Number(groupSelect.value) : null;
     modal.classList.add('hidden');
-    onSaveNew(alias, selectedCategory || 'Sin categoría');
+    onSaveNew(alias, selectedCategory || 'Sin categoría', groupId);
   };
 
-  // Requisito: "una misma persona puede tener mas de una tarjeta por
-  // tanto debe poder asociarse a un contacto existente" — si ya hay
-  // contactos creados, se ofrece la opción de vincular esta tarjeta
-  // nueva a uno de ellos en vez de crear un contacto duplicado.
   if (existingSelect && associateRow) {
     if (existingContacts && existingContacts.length) {
       associateRow.classList.remove('hidden');
@@ -396,7 +431,6 @@ export function showWhoIsModal({ identifier, identifierType, amount, currency, d
     };
   }
 
-  // Requisito: "omitir puede ser temporal o indefinido".
   if (skipOnceBtn) {
     skipOnceBtn.onclick = () => {
       modal.classList.add('hidden');
@@ -411,10 +445,6 @@ export function showWhoIsModal({ identifier, identifierType, amount, currency, d
   }
 }
 
-/**
- * Requisito: "filtro por dia". Muestra la lista de transacciones
- * individuales (no agrupadas) de un día concreto, en un modal simple.
- */
 export function renderDayTransactions(dateStr, transactions) {
   const modal = document.getElementById('day-modal');
   const title = document.getElementById('day-modal-title');

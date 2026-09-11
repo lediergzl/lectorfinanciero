@@ -1,28 +1,28 @@
 @echo off
 REM sync-android.bat
 REM
-REM Equivalente para Windows (cmd) de sync-android.sh. NO usa Node ni
-REM npx, solo comandos nativos de Windows (xcopy/rmdir/copy). Reemplaza
-REM a "npx cap sync android", que SÍ requiere tener Node y el propio
-REM Capacitor CLI instalados (y por eso pedía TypeScript).
-REM
-REM Uso (desde la carpeta raíz del proyecto, ej. C:\Users\tú\Downloads\lector):
-REM   sync-android.bat
-REM
-REM Ejecútalo cada vez que cambies algo en index.html o en src\*.js antes
-REM de compilar con gradlew.
+REM Sincroniza la fuente canónica (index.html + src\) hacia www\ y luego
+REM copia www\ a los assets públicos de Android. No requiere Node ni npx.
 
 setlocal
 cd /d "%~dp0"
 
+set "WWW_DIR=www"
 set "ASSETS_DIR=android\app\src\main\assets\public"
+
+echo -^> Sincronizando index.html + src\ -^> %WWW_DIR%\
+if exist "%WWW_DIR%" rmdir /s /q "%WWW_DIR%"
+mkdir "%WWW_DIR%"
+xcopy /e /i /y "src\*" "%WWW_DIR%\src\" >nul
+copy /y "index.html" "%WWW_DIR%\index.html" >nul
+
 
 echo -^> Limpiando %ASSETS_DIR%
 if exist "%ASSETS_DIR%" rmdir /s /q "%ASSETS_DIR%"
 mkdir "%ASSETS_DIR%"
 
 echo -^> Copiando www\ -^> %ASSETS_DIR%
-xcopy /e /i /y "www\*" "%ASSETS_DIR%\" >nul
+xcopy /e /i /y "%WWW_DIR%\*" "%ASSETS_DIR%\" >nul
 
 echo -^> Copiando capacitor.config.json -^> android\app\src\main\assets\
 copy /y "capacitor.config.json" "android\app\src\main\assets\capacitor.config.json" >nul
@@ -31,5 +31,9 @@ echo.
 echo Listo. Ahora puedes compilar con:
 echo     cd android
 echo     gradlew.bat assembleDebug
+
+echo.
+echo Fuente canonica: index.html + src\
+echo www\ y los assets Android fueron regenerados.
 
 endlocal

@@ -1,18 +1,6 @@
 /**
  * main.js
- * Orquesta el flujo completo de la app:
- *
- *   SMS -> parser -> ¿anterior a la fecha de inicio configurada? -> SÍ: ignorar
- *                  -> ¿SMS ya omitido "siempre" antes? -> SÍ: ignorar
- *                  -> ¿modo "una sola categoría" activo? -> SÍ: guardar directo bajo esa categoría
- *                  -> ¿identificador ya asociado a un contacto? -> SÍ: guardar directo
- *                                                                -> NO: se guarda en la cola de
- *                                                                "Pendientes" (NO se interrumpe
- *                                                                al usuario con un modal por
- *                                                                cada una); él las etiqueta
- *                                                                cuando puede, día por día y
- *                                                                paginadas.
- *                  -> insertar en DB -> refrescar resumen del mes
+ * Orquesta el flujo completo de la app.
  */
 import {
   initDatabase,
@@ -21,6 +9,12 @@ import {
   associateIdentifierToContact,
   listContacts,
   insertTransaction,
+  insertPendingTransaction,
+  deletePendingTransaction,
+  listPendingTransactions,
+  getCatchAllContact,
+  getTransactionsForContact,
+  reassignTransaction,
   getMonthlySummary,
   getTransactionsForDay,
   isSmsSkipped,
@@ -60,24 +54,30 @@ import {
   showGroupStatsModal,
   showContactsModal,
   renderPendingBadge,
-  showPendingModal
+  showPendingModal,
+  showLoader,
+  hideLoader,
+  showReclassifyModal
 } from './ui/render.js';
 
 const PENDING_PAGE_SIZE = 8;
 
 let currentYear;
-let currentMonth; // 1-12
-let pendingQueue = []; // operaciones cuyo contacto aún no se ha catalogado (en memoria)
-let pendingViewDate = null; // día que se está mostrando en la pantalla "Pendientes"
+let currentMonth;
+let pendingQueue = [];
+let pendingViewYear;
+let pendingViewMonth;
+let pendingViewDate = null;
 let pendingPage = 0;
 let catchAll = { enabled: false, alias: 'Negocio', category: 'Negocio' };
-let indexSinceDate = null; // 'YYYY-MM-DD' o null (sin límite)
+let indexSinceDate = null;
 let indexSinceCutoffIso = null;
 let onboardingCompleted = false;
 
 async function bootstrap() {
-  initThemeToggle(); // no depende de la BD, se conecta de inmediato
+  initThemeToggle();
   await initDatabase();
+  pendingQueue = await listPendingTransactions();
   catchAll = await getCatchAllSettings();
   await loadIndexSinceCutoff();
   onboardingCompleted = await getOnboardingCompleted();
@@ -99,24 +99,6 @@ function todayDateStr() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/* ---------------------------------------------------------------- */
-/* Permisos                                                          */
-/* ---------------------------------------------------------------- */
-
-/**
- * Requisito: "cuando abre la apk por primera ves debe mostrar una
- * ventana con los permisos para que el usuario lo permita". Se
- * muestra la pantalla explicativa y, si es la primera vez (Android
- * todavía puede preguntar), se dispara el diálogo del sistema de
- * inmediato, sin esperar a que el usuario toque nada.
- *
- * Requisito: "el permiso de sms esta desabilitado por defecto por
- * tanto debe haber un boton q el usuario toque y lo lleve a donde
- * esta ese permiso y pueda activarlo". Si el permiso quedó denegado
- * de forma permanente, Android deja de mostrar el diálogo nativo: en
- * ese caso se oculta el botón de "Conceder permisos" y se muestra en
- * su lugar uno que abre directamente la pantalla de ajustes de la app.
- */
 async function evaluatePermissions(isFirstLaunch) {
   const perms = await checkSmsPermissions();
   const granted = perms.readSms === 'granted' && perms.receiveSms === 'granted';
@@ -133,9 +115,7 @@ async function evaluatePermissions(isFirstLaunch) {
   document.getElementById('btn-request-permissions').onclick = handleRequestPermissions;
   document.getElementById('btn-open-settings').onclick = handleOpenAppSettings;
 
-  if (isFirstLaunch && !permanentlyDenied) {
-    await handleRequestPermissions();
-  }
+  if (isFirstLaunch && !permanentlyDenied) await handleRequestPermissions();
 }
 
 function updatePermissionScreenUI(permanentlyDenied) {
@@ -159,16 +139,12 @@ async function handleRequestPermissions() {
   if (result.readSms === 'granted' && result.receiveSms === 'granted') {
     await startApp();
   } else {
-    // Puede haber quedado "denegado permanentemente" tras este intento;
-    // se re-evalúa para mostrar el botón correcto.
     await evaluatePermissions(false);
   }
 }
 
 async function handleOpenAppSettings() {
   await openAppSettings();
-  // Al volver de Ajustes (el usuario puede haber activado el permiso a
-  // mano), se vuelve a comprobar el estado.
   document.addEventListener('visibilitychange', function onVisible() {
     if (document.visibilityState === 'visible') {
       document.removeEventListener('visibilitychange', onVisible);
@@ -177,27 +153,16 @@ async function handleOpenAppSettings() {
   });
 }
 
-/* ---------------------------------------------------------------- */
-/* Arranque de la app                                                */
-/* ---------------------------------------------------------------- */
-
 async function startApp() {
   showScreen('main-screen');
   wireNavigation();
 
-  // Escucha de SMS nuevos en tiempo real. Se conecta siempre, incluso
-  // antes de terminar el onboarding, por si llega algo justo en ese
-  // instante (handleIncomingOperation ya respeta indexSinceCutoffIso).
   addIncomingSmsListener(async (sms) => {
     await handleIncomingOperation(processSms(sms));
     await refreshSummary();
     renderPendingBadge(pendingQueue.length);
   });
 
-  // Requisito: "al cargar la apk por primera vez no debemos indexar
-  // nada; primero se le muestra al usuario la configuración para que
-  // elija a partir de cuándo quiere indexar". Solo se lee el
-  // historial de SMS después de que el usuario guarde esa elección.
   if (!onboardingCompleted) {
     await runFirstLaunchSetup();
   } else {
@@ -209,12 +174,6 @@ async function startApp() {
   renderPendingBadge(pendingQueue.length);
 }
 
-/**
- * Muestra el modal de ajustes en modo obligatorio (sin botón de
- * cerrar) para que el usuario elija desde cuándo indexar antes de
- * leer ningún SMS del historial. Al guardar, se persiste la elección,
- * se marca el onboarding como completado y recién ahí se sincroniza.
- */
 function runFirstLaunchSetup() {
   return new Promise((resolve) => {
     showSettingsModal(
@@ -239,40 +198,21 @@ function runFirstLaunchSetup() {
 }
 
 async function syncSmsHistory() {
-  const allSms = await readAllSms();
-  const operations = processSmsBatch(allSms);
-
-  for (const op of operations) {
-    await handleIncomingOperation(op);
+  showLoader('Leyendo e indexando SMS…');
+  try {
+    const allSms = await readAllSms();
+    const operations = processSmsBatch(allSms);
+    for (const op of operations) await handleIncomingOperation(op);
+    renderPendingBadge(pendingQueue.length);
+  } finally {
+    hideLoader();
   }
-  renderPendingBadge(pendingQueue.length);
 }
 
-/**
- * Procesa UNA operación normalizada:
- *  - Si es anterior a la fecha de inicio configurada -> se ignora.
- *  - Si el SMS ya fue "omitido siempre" antes -> se ignora.
- *  - Si el modo "una sola categoría" está activo -> se guarda directo
- *    bajo el contacto único, sin preguntar nada.
- *  - Si el identificador ya está asociado a un contacto (como
- *    identificador original o como tarjeta adicional) -> inserta directo.
- *  - Si no -> se agrega a la cola de "Pendientes" en memoria. YA NO se
- *    muestra ningún modal automáticamente: si hay 100 transferencias
- *    sin catalogar, el usuario las etiqueta cuando tenga tiempo desde
- *    la sección "Pendientes", día por día.
- */
 async function handleIncomingOperation(op) {
   if (!op) return;
-
-  // Requisito: "debe poder definirse la fecha desde la cual quieres
-  // iniciar a indexar las transferencias".
-  if (indexSinceCutoffIso && op.date < indexSinceCutoffIso) {
-    return;
-  }
-
-  if (await isSmsSkipped(op.smsHash)) {
-    return;
-  }
+  if (indexSinceCutoffIso && op.date < indexSinceCutoffIso) return;
+  if (await isSmsSkipped(op.smsHash)) return;
 
   if (catchAll.enabled) {
     const contact = await findOrCreateCatchAllContact(catchAll.alias, catchAll.category);
@@ -286,9 +226,8 @@ async function handleIncomingOperation(op) {
     return;
   }
 
-  // Evita duplicados si el mismo SMS pendiente vuelve a aparecer en
-  // una sincronización posterior (aún no se guardó ni se omitió).
   if (!pendingQueue.some((o) => o.smsHash === op.smsHash)) {
+    await insertPendingTransaction(op);
     pendingQueue.push(op);
   }
 }
@@ -299,20 +238,12 @@ async function refreshSummary() {
   renderSummary(summary);
 }
 
-/**
- * Requisito: "filtro por dia". Muestra las transacciones individuales
- * de la fecha elegida en el selector de fecha del encabezado.
- */
 async function handleDayFilter(dateStr) {
   if (!dateStr) return;
   const dayTransactions = await getTransactionsForDay(dateStr);
   renderDayTransactions(dateStr, dayTransactions);
 }
 
-/**
- * Requisito: "debe poder ponerse en blanco". Borra todas las
- * transferencias/contactos/grupos guardados (con confirmación) y refresca.
- */
 async function handleReset() {
   const confirmado = confirm(
     '¿Seguro que quieres borrar TODAS las transferencias, contactos y grupos guardados? Esta acción no se puede deshacer.'
@@ -327,10 +258,6 @@ async function handleReset() {
   alert('Listo, la app quedó en blanco.');
 }
 
-/**
- * Abre el modal de ajustes: modo "una sola categoría", fecha desde la
- * cual indexar, y la aclaración entrantes/salientes.
- */
 function handleOpenSettings() {
   showSettingsModal({ ...catchAll, indexSinceDate }, async (newSettings) => {
     catchAll = { enabled: newSettings.enabled, alias: newSettings.alias, category: newSettings.category };
@@ -342,10 +269,17 @@ function handleOpenSettings() {
   });
 }
 
-/* ---------------------------------------------------------------- */
-/* Pendientes por etiquetar (requisito: no interrumpir con 100       */
-/* modales; el usuario los cataloga cuando puede, día por día)       */
-/* ---------------------------------------------------------------- */
+function getPendingDayCountsForMonth(year, month) {
+  const prefix = `${year}-${String(month).padStart(2, '0')}`;
+  const counts = {};
+  for (const op of pendingQueue) {
+    if (op.date.startsWith(prefix)) {
+      const day = op.date.slice(0, 10);
+      counts[day] = (counts[day] || 0) + 1;
+    }
+  }
+  return counts;
+}
 
 function getPendingForDay(dateStr) {
   const from = `${dateStr}T00:00:00.000Z`;
@@ -355,21 +289,25 @@ function getPendingForDay(dateStr) {
     .sort((a, b) => (a.date < b.date ? -1 : 1));
 }
 
-/**
- * Requisito: "solo debe mostrarse en la pantalla las transferencias
- * del dia y un paginador por si son muchas". Se abre siempre en el
- * día de hoy por defecto; el usuario puede cambiar de día con el
- * selector de fecha del propio modal para etiquetar pendientes de
- * otros días.
- */
 function handleOpenPending() {
-  pendingViewDate = todayDateStr();
+  const now = new Date();
+  pendingViewYear = now.getFullYear();
+  pendingViewMonth = now.getMonth() + 1;
+  pendingViewDate = null;
   pendingPage = 0;
   renderPendingScreenView();
 }
 
 function renderPendingScreenView() {
-  const dayItems = getPendingForDay(pendingViewDate);
+  const dayCounts = getPendingDayCountsForMonth(pendingViewYear, pendingViewMonth);
+  const days = Object.keys(dayCounts).sort();
+
+  if (!pendingViewDate || !dayCounts[pendingViewDate]) {
+    pendingViewDate = days.length ? days[0] : null;
+    pendingPage = 0;
+  }
+
+  const dayItems = pendingViewDate ? getPendingForDay(pendingViewDate) : [];
   const totalPages = Math.max(1, Math.ceil(dayItems.length / PENDING_PAGE_SIZE));
   if (pendingPage >= totalPages) pendingPage = totalPages - 1;
   if (pendingPage < 0) pendingPage = 0;
@@ -379,7 +317,10 @@ function renderPendingScreenView() {
 
   showPendingModal(
     {
-      dateStr: pendingViewDate,
+      year: pendingViewYear,
+      month: pendingViewMonth,
+      dayCounts,
+      selectedDate: pendingViewDate,
       items: pageItems,
       page: pendingPage,
       totalPages,
@@ -387,8 +328,22 @@ function renderPendingScreenView() {
       totalOverall: pendingQueue.length
     },
     {
-      onChangeDay: (newDate) => {
-        pendingViewDate = newDate;
+      onPrevMonth: () => {
+        pendingViewMonth--;
+        if (pendingViewMonth < 1) { pendingViewMonth = 12; pendingViewYear--; }
+        pendingViewDate = null;
+        pendingPage = 0;
+        renderPendingScreenView();
+      },
+      onNextMonth: () => {
+        pendingViewMonth++;
+        if (pendingViewMonth > 12) { pendingViewMonth = 1; pendingViewYear++; }
+        pendingViewDate = null;
+        pendingPage = 0;
+        renderPendingScreenView();
+      },
+      onSelectDay: (dateStr) => {
+        pendingViewDate = dateStr;
         pendingPage = 0;
         renderPendingScreenView();
       },
@@ -405,39 +360,25 @@ function renderPendingScreenView() {
   );
 }
 
-/**
- * Abre el modal "¿Quién es?" para UNA operación puntual, elegida desde
- * la lista de "Pendientes". Se apila visualmente encima de esa
- * pantalla (que sigue abierta detrás) para que, al terminar, el
- * usuario siga viendo la lista actualizada y pueda etiquetar la
- * siguiente sin tener que reabrir nada.
- */
 async function openLabelFlowForOp(op) {
-  const existingContacts = await listContacts();
+  const [existingContacts, groups] = await Promise.all([listContacts(), listGroups()]);
 
   showWhoIsModal(
     op,
     existingContacts,
-    // Guardar como contacto NUEVO.
-    async (alias, category) => {
+    groups,
+    async (alias, category, groupId) => {
       const contact = await createContact(op.identifier, op.identifierType, alias, category);
+      if (groupId) await assignContactToGroup(contact.id, groupId);
       await insertTransaction(op, contact.id);
       await removeFromPending(op);
     },
-    // Requisito: "una misma persona puede tener mas de una tarjeta por
-    // tanto debe poder asociarse a un contacto existente".
     async (contactId) => {
       const contact = await associateIdentifierToContact(op.identifier, op.identifierType, contactId);
       await insertTransaction(op, contact.id);
       await removeFromPending(op);
     },
-    // Omitir "por ahora" (temporal): no se guarda ni se recuerda nada;
-    // en la próxima sincronización este SMS se vuelve a detectar.
-    async () => {
-      await removeFromPending(op);
-    },
-    // Omitir "siempre" (indefinido): se recuerda el SMS para no volver
-    // a preguntar por él nunca más.
+    async () => { await removeFromPending(op); },
     async () => {
       await markSmsSkipped(op.smsHash);
       await removeFromPending(op);
@@ -446,24 +387,48 @@ async function openLabelFlowForOp(op) {
 }
 
 async function removeFromPending(op) {
+  await deletePendingTransaction(op.smsHash);
   pendingQueue = pendingQueue.filter((o) => o.smsHash !== op.smsHash);
   await refreshSummary();
   await refreshGroups();
   renderPendingBadge(pendingQueue.length);
-  renderPendingScreenView(); // refresca la lista/paginador del mismo día
+  renderPendingScreenView();
 }
 
-/* ---------------------------------------------------------------- */
-/* Grupos                                                            */
-/* ---------------------------------------------------------------- */
+async function handleReclassify() {
+  const catchAllContact = await getCatchAllContact();
+  if (!catchAllContact) {
+    alert('Todavía no hay transacciones guardadas en la categoría única.');
+    return;
+  }
+
+  showLoader('Cargando transacciones…');
+  try {
+    const [transactions, contacts] = await Promise.all([
+      getTransactionsForContact(catchAllContact.id, 100, 0),
+      listContacts()
+    ]);
+    showReclassifyModal(transactions, contacts, {
+      onAssign: async (transactionId, contactId) => {
+        await reassignTransaction(transactionId, contactId);
+        await refreshSummary();
+        await handleReclassify();
+      },
+      onAssignNew: async (transactionId, alias) => {
+        const contact = await createContact(`MANUAL_${Date.now()}_${transactionId}`, 'manual', alias, 'Sin categoría');
+        await reassignTransaction(transactionId, contact.id);
+        await refreshSummary();
+        await handleReclassify();
+      }
+    });
+  } finally {
+    hideLoader();
+  }
+}
 
 async function refreshGroups() {
   const groups = await listGroups();
-  renderGroupsList(
-    groups,
-    (group) => handleOpenGroup(group),
-    (group) => handleDeleteGroup(group)
-  );
+  renderGroupsList(groups, (group) => handleOpenGroup(group), (group) => handleDeleteGroup(group));
 }
 
 async function handleNewGroup() {
@@ -486,10 +451,6 @@ async function handleDeleteGroup(group) {
   await refreshGroups();
 }
 
-/**
- * Pantalla de contactos donde se puede ver cuántas tarjetas tiene cada
- * persona y anclarla a un grupo.
- */
 async function handleOpenContacts() {
   const [contacts, groups] = await Promise.all([listContacts(), listGroups()]);
   showContactsModal(contacts, groups, async (contactId, groupId) => {
@@ -522,6 +483,7 @@ function wireNavigation() {
   document.getElementById('btn-settings').onclick = handleOpenSettings;
   document.getElementById('btn-new-group').onclick = handleNewGroup;
   document.getElementById('btn-manage-contacts').onclick = handleOpenContacts;
+  document.getElementById('btn-reclassify').onclick = handleReclassify;
   document.getElementById('btn-open-pending').onclick = handleOpenPending;
 }
 

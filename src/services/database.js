@@ -152,12 +152,6 @@ export async function initDatabase() {
   opened = true;
 }
 
-/**
- * `group_id` se añade con ALTER TABLE porque `contacts` puede venir de
- * una instalación previa (sin esta columna). SQLite no soporta
- * "ADD COLUMN IF NOT EXISTS", así que primero se comprueba con
- * PRAGMA table_info si hace falta añadirla.
- */
 async function ensureContactsGroupColumn() {
   const res = await sqlite().query({
     database: DB_NAME,
@@ -177,11 +171,6 @@ async function ensureContactsGroupColumn() {
 
 // --- CONTACTOS ---
 
-/**
- * Busca un contacto por CUALQUIER identificador que tenga asociado:
- * primero el identificador "original" (columna contacts.identifier),
- * y si no, entre los identificadores adicionales (contact_identifiers).
- */
 export async function findContactByIdentifier(identifier) {
   let res = await sqlite().query({
     database: DB_NAME,
@@ -212,11 +201,6 @@ export async function createContact(identifier, identifierType, alias, category 
   return findContactByIdentifier(identifier);
 }
 
-/**
- * Asocia un identificador (nueva tarjeta/teléfono) a un contacto que
- * YA EXISTE, en vez de crear un contacto nuevo (requisito: "una misma
- * persona puede tener mas de una tarjeta").
- */
 export async function associateIdentifierToContact(identifier, identifierType, contactId) {
   await sqlite().run({
     database: DB_NAME,
@@ -229,10 +213,6 @@ export async function associateIdentifierToContact(identifier, identifierType, c
   return findContactByIdentifier(identifier);
 }
 
-/**
- * Lista todos los contactos, con el nombre de su grupo (si tiene) y
- * cuántas tarjetas/teléfonos tiene asociados en total.
- */
 export async function listContacts() {
   const res = await sqlite().query({
     database: DB_NAME,
@@ -249,10 +229,6 @@ export async function listContacts() {
 
 // --- GRUPOS ---
 
-/**
- * Requisito: "se necesita poder crear un grupo y anclar usuarios a el
- * y que te de las estadisticas de ese grupo".
- */
 export async function createGroup(name) {
   await sqlite().run({
     database: DB_NAME,
@@ -302,7 +278,6 @@ export async function deleteGroup(groupId) {
   });
 }
 
-/** "Anclar" (o desanclar con groupId = null) un contacto a un grupo. */
 export async function assignContactToGroup(contactId, groupId) {
   await sqlite().run({
     database: DB_NAME,
@@ -314,11 +289,6 @@ export async function assignContactToGroup(contactId, groupId) {
   });
 }
 
-/**
- * Estadísticas de un grupo para un mes dado: totales por tipo/moneda y
- * desglose por cada persona del grupo (mismo formato que
- * getMonthlySummary, pero filtrado a un solo grupo).
- */
 export async function getGroupSummary(groupId, year, month) {
   const from = `${year}-${String(month).padStart(2, '0')}-01T00:00:00.000Z`;
   const to = new Date(year, month, 1).toISOString();
@@ -352,11 +322,6 @@ export async function getGroupSummary(groupId, year, month) {
 
 // --- TRANSACCIONES ---
 
-/**
- * Inserta una operación normalizada (salida de parser/index.js).
- * Usa INSERT OR IGNORE sobre sms_hash para evitar duplicados si el SMS
- * ya fue procesado antes.
- */
 export async function insertTransaction(op, contactId) {
   const stmt = `
     INSERT OR IGNORE INTO transactions
@@ -383,17 +348,72 @@ export async function insertTransaction(op, contactId) {
   });
 }
 
-/**
- * Devuelve el resumen del mes: ingresos, gastos, balance y transacciones
- * agrupadas por alias (contacto), tal como se mostró en el diseño de
- * la pantalla principal.
- *
- * @param {number} year
- * @param {number} month - 1 a 12
- */
+/** Persistencia de la cola de pendientes para sobrevivir a reinicios. */
+export async function insertPendingTransaction(op) {
+  await sqlite().run({
+    database: DB_NAME,
+    statement: `INSERT OR IGNORE INTO pending_transactions
+      (sms_hash, identifier, identifier_type, type, amount, currency, date, raw_sms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    values: [op.smsHash, op.identifier, op.identifierType, op.type, op.amount, op.currency, op.date, op.rawText],
+    transaction: true,
+    readonly: false,
+    returnMode: 'no'
+  });
+}
+
+export async function deletePendingTransaction(smsHash) {
+  await sqlite().run({
+    database: DB_NAME,
+    statement: 'DELETE FROM pending_transactions WHERE sms_hash = ?',
+    values: [smsHash],
+    transaction: true,
+    readonly: false,
+    returnMode: 'no'
+  });
+}
+
+export async function listPendingTransactions() {
+  const res = await sqlite().query({
+    database: DB_NAME,
+    statement: 'SELECT * FROM pending_transactions ORDER BY date DESC',
+    values: []
+  });
+  return (res.values || []).map((row) => ({
+    identifier: row.identifier,
+    identifierType: row.identifier_type,
+    type: row.type,
+    amount: row.amount,
+    currency: row.currency,
+    date: row.date,
+    rawText: row.raw_sms,
+    smsHash: row.sms_hash
+  }));
+}
+
+export async function getTransactionsForContact(contactId, limit = 100, offset = 0) {
+  const res = await sqlite().query({
+    database: DB_NAME,
+    statement: 'SELECT * FROM transactions WHERE contact_id = ? ORDER BY date DESC LIMIT ? OFFSET ?',
+    values: [contactId, limit, offset]
+  });
+  return res.values || [];
+}
+
+export async function reassignTransaction(transactionId, contactId) {
+  await sqlite().run({
+    database: DB_NAME,
+    statement: 'UPDATE transactions SET contact_id = ? WHERE id = ?',
+    values: [contactId, transactionId],
+    transaction: true,
+    readonly: false,
+    returnMode: 'no'
+  });
+}
+
 export async function getMonthlySummary(year, month) {
   const from = `${year}-${String(month).padStart(2, '0')}-01T00:00:00.000Z`;
-  const toDate = new Date(year, month, 1); // primer día del mes siguiente
+  const toDate = new Date(year, month, 1);
   const to = toDate.toISOString();
 
   const totalsRes = await sqlite().query({
@@ -442,12 +462,6 @@ export async function getTransactionsForMonth(year, month) {
   return res.values || [];
 }
 
-/**
- * Filtro por día. Devuelve las transacciones individuales (no
- * agrupadas) de un día concreto.
- *
- * @param {string} dateStr - fecha en formato 'YYYY-MM-DD'
- */
 export async function getTransactionsForDay(dateStr) {
   const from = `${dateStr}T00:00:00.000Z`;
   const to = `${dateStr}T23:59:59.999Z`;
@@ -463,7 +477,7 @@ export async function getTransactionsForDay(dateStr) {
   return res.values || [];
 }
 
-// --- SMS OMITIDOS ("saltar" una transferencia sin registrarla) ---
+// --- SMS OMITIDOS ---
 
 export async function isSmsSkipped(smsHash) {
   const res = await sqlite().query({
@@ -485,7 +499,7 @@ export async function markSmsSkipped(smsHash) {
   });
 }
 
-// --- AJUSTES (settings clave/valor) ---
+// --- AJUSTES ---
 
 export async function getSetting(key, defaultValue = null) {
   const res = await sqlite().query({
@@ -507,11 +521,6 @@ export async function setSetting(key, value) {
   });
 }
 
-/**
- * Devuelve la configuración del "modo una sola categoría". Cuando está
- * activo, toda transferencia nueva (entrante o saliente) se asigna
- * automáticamente al mismo contacto/categoría sin preguntar "¿Quién es?".
- */
 export async function getCatchAllSettings() {
   const enabled = await getSetting('catchall_enabled', '0');
   const alias = await getSetting('catchall_alias', 'Negocio');
@@ -525,11 +534,6 @@ export async function setCatchAllSettings({ enabled, alias, category }) {
   await setSetting('catchall_category', category || 'Negocio');
 }
 
-/**
- * Requisito: "debe poder definirse la fecha desde la cual quieres
- * iniciar a indexar las transferencias". Devuelve 'YYYY-MM-DD' o null
- * si no hay límite configurado (se indexa todo el historial).
- */
 export async function getIndexSinceDate() {
   const value = await getSetting('index_since_date', '');
   return value ? value : null;
@@ -539,14 +543,6 @@ export async function setIndexSinceDate(dateStr) {
   await setSetting('index_since_date', dateStr || '');
 }
 
-/**
- * Requisito: "al cargar la apk por primera vez no debemos indexar
- * nada; primero se le muestra al usuario la configuración para que
- * elija a partir de cuándo quiere indexar". Este flag marca si el
- * usuario ya pasó por esa pantalla de configuración inicial al menos
- * una vez (independientemente de qué fecha haya elegido, incluso si
- * decide indexar todo el historial).
- */
 export async function getOnboardingCompleted() {
   const value = await getSetting('onboarding_completed', '0');
   return value === '1';
@@ -556,15 +552,9 @@ export async function setOnboardingCompleted() {
   await setSetting('onboarding_completed', '1');
 }
 
-/**
- * Devuelve (creando si hace falta) el contacto único usado por el
- * "modo una sola categoría". Todas las transferencias entrantes y
- * salientes de remitentes/cuentas desconocidos se agrupan aquí.
- */
 export async function findOrCreateCatchAllContact(alias, category) {
   let contact = await findContactByIdentifier(CATCHALL_IDENTIFIER);
   if (contact) {
-    // Si el usuario cambió el nombre/categoría en los ajustes, se actualiza.
     if (contact.alias !== alias || contact.category !== category) {
       await sqlite().run({
         database: DB_NAME,
@@ -581,18 +571,12 @@ export async function findOrCreateCatchAllContact(alias, category) {
   return createContact(CATCHALL_IDENTIFIER, 'catchall', alias, category);
 }
 
-// --- REINICIO ("ponerse en blanco") ---
-
-/**
- * Borra todas las transferencias, contactos, grupos y SMS omitidos,
- * dejando la app como recién instalada. Los ajustes (modo una sola
- * categoría, fecha de inicio de indexado, etc.) se conservan.
- */
 export async function resetAllData() {
   await sqlite().execute({
     database: DB_NAME,
     statements: `
       DELETE FROM transactions;
+      DELETE FROM pending_transactions;
       DELETE FROM contact_identifiers;
       DELETE FROM contacts;
       DELETE FROM groups;

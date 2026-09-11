@@ -483,4 +483,14 @@ function wireNavigation() {
   document.getElementById('btn-open-pending').onclick = handleOpenPending;
 }
 
-bootstrap();
+bootstrap().catch((err) => {
+  console.error('Fallo crítico en bootstrap:', err);
+  document.body.innerHTML =
+    '<div style="padding:20px;color:#fff;background:#111;font-family:monospace;' +
+    'white-space:pre-wrap;min-height:100vh;box-sizing:border-box">' +
+    'Error al iniciar la app:\n' +
+    (err && err.message ? err.message : String(err)) +
+    '\n\n' +
+    (err && err.stack ? err.stack : '') +
+    '</div>';
+});

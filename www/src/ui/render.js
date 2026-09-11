@@ -429,4 +429,3 @@ export function renderDayTransactions(dateStr, transactions) {
   modal.classList.remove('hidden');
   document.getElementById('btn-close-day-modal').onclick = () => modal.classList.add('hidden');
 }
-}

@@ -3,7 +3,6 @@ package com.lectortransferencias.sms;
 import android.Manifest;
 import android.content.ContentResolver;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
 import android.provider.Settings;
@@ -17,27 +16,8 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
-/**
- * SmsReaderPlugin
- *
- * Plugin nativo Capacitor que expone a JavaScript:
- *  - requestPermissions()
- *  - checkPermissions()
- *  - readAllSms(): lee el historial completo vía ContentResolver
- *  - openAppSettings(): abre la pantalla de "Info de la app" del
- *    sistema, para cuando Android ya no deja pedir el permiso de SMS
- *    de nuevo (el usuario marcó "no volver a preguntar" o lo desactivó
- *    manualmente) y hay que dejarlo entrar a activarlo a mano.
- *
- * El listener de SMS entrantes en tiempo real se implementa por separado
- * en IncomingSmsReceiver.java (BroadcastReceiver), que emite el evento
- * "smsReceived" a través de este plugin.
- *
- * IMPORTANTE: READ_SMS y RECEIVE_SMS son permisos "peligrosos" restringidos
- * por Google Play para la mayoría de apps. Este plugin está pensado para
- * distribución como APK directa (fuera de Play Store), como se acordó
- * para el ecosistema cubano.
- */
+import org.json.JSONArray;
+
 @CapacitorPlugin(
     name = "SmsReader",
     permissions = {
@@ -50,9 +30,15 @@ public class SmsReaderPlugin extends Plugin {
     @Override
     public void load() {
         super.load();
-        // Registra esta instancia como la activa para que
-        // IncomingSmsReceiver pueda reenviarle los SMS nuevos.
         IncomingSmsReceiver.activePluginInstance = this;
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        if (IncomingSmsReceiver.activePluginInstance == this) {
+            IncomingSmsReceiver.activePluginInstance = null;
+        }
+        super.handleOnDestroy();
     }
 
     @PluginMethod
@@ -73,12 +59,6 @@ public class SmsReaderPlugin extends Plugin {
         checkPermissions(call);
     }
 
-    /**
-     * Abre directamente la pantalla de ajustes de ESTA app dentro de
-     * "Aplicaciones" del sistema (donde vive el interruptor de permisos
-     * de SMS). Se usa como respaldo cuando Android ya no muestra el
-     * diálogo nativo de permisos (denegación permanente).
-     */
     @PluginMethod
     public void openAppSettings(PluginCall call) {
         try {
@@ -93,12 +73,6 @@ public class SmsReaderPlugin extends Plugin {
         }
     }
 
-    /**
-     * Lee el historial completo de SMS de la bandeja de entrada usando
-     * el ContentResolver estándar de Android (content://sms/inbox).
-     * No filtra por contenido aquí: ese trabajo lo hace el parser en JS
-     * (src/parser/index.js), este método solo entrega los datos crudos.
-     */
     @PluginMethod
     public void readAllSms(PluginCall call) {
         if (getPermissionState("readSms") != com.getcapacitor.PermissionState.GRANTED) {
@@ -135,10 +109,43 @@ public class SmsReaderPlugin extends Plugin {
         call.resolve(result);
     }
 
-    /**
-     * Llamado por IncomingSmsReceiver cuando llega un SMS nuevo.
-     * Emite el evento "smsReceived" hacia JavaScript.
-     */
+    @PluginMethod
+    public void getPendingIncomingSms(PluginCall call) {
+        try {
+            JSONArray stored = PendingSmsStore.getAll(getContext().getApplicationContext());
+            JSArray messages = new JSArray();
+            for (int i = 0; i < stored.length(); i++) {
+                org.json.JSONObject item = stored.optJSONObject(i);
+                if (item == null) continue;
+                JSObject msg = new JSObject();
+                msg.put("address", item.optString("address", ""));
+                msg.put("body", item.optString("body", ""));
+                msg.put("date", item.optLong("date", 0L));
+                messages.put(msg);
+            }
+
+            JSObject result = new JSObject();
+            result.put("messages", messages);
+            call.resolve(result);
+        } catch (Exception e) {
+            call.reject("Error leyendo cola de SMS pendientes: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void ackIncomingSms(PluginCall call) {
+        String address = call.getString("address", "");
+        String body = call.getString("body", "");
+        Long date = call.getLong("date");
+        if (date == null) {
+            call.reject("Falta date para confirmar el SMS");
+            return;
+        }
+
+        PendingSmsStore.remove(getContext().getApplicationContext(), address, body, date);
+        call.resolve();
+    }
+
     public void notifySmsReceived(String address, String body, long date) {
         JSObject data = new JSObject();
         data.put("address", address);

@@ -552,6 +552,19 @@ export async function setOnboardingCompleted() {
   await setSetting('onboarding_completed', '1');
 }
 
+/**
+ * FIX: faltaba esta función. src/main.js la importa (para el flujo de
+ * "Reclasificar categoría única") pero nunca estuvo definida aquí, lo
+ * que rompía el import en tiempo de enlace de módulos ES y dejaba la
+ * pantalla completa en negro (bootstrap() nunca llegaba a ejecutarse).
+ *
+ * A diferencia de findOrCreateCatchAllContact, esta NO crea el
+ * contacto si no existe: solo lo busca (o devuelve null).
+ */
+export async function getCatchAllContact() {
+  return findContactByIdentifier(CATCHALL_IDENTIFIER);
+}
+
 export async function findOrCreateCatchAllContact(alias, category) {
   let contact = await findContactByIdentifier(CATCHALL_IDENTIFIER);
   if (contact) {

@@ -1,0 +1,9 @@
+// Vendorizado manualmente: ya NO depende de node_modules ni de Node/npm.
+// El código nativo de estos plugins vive directamente dentro del proyecto
+// Android (carpetas capacitor-android/ y capacitor-community-sqlite/,
+// copiadas una sola vez desde los paquetes oficiales de Capacitor).
+include ':capacitor-android'
+project(':capacitor-android').projectDir = new File('./capacitor-android')
+
+include ':capacitor-community-sqlite'
+project(':capacitor-community-sqlite').projectDir = new File('./capacitor-community-sqlite')

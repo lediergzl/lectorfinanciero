@@ -37,6 +37,8 @@ import {
   requestSmsPermissions,
   checkSmsPermissions,
   readAllSms,
+  readPendingIncomingSms,
+  ackIncomingSms,
   addIncomingSmsListener,
   openAppSettings
 } from './services/smsReader.js';
@@ -158,9 +160,15 @@ async function startApp() {
   wireNavigation();
 
   addIncomingSmsListener(async (sms) => {
-    await handleIncomingOperation(processSms(sms));
-    await refreshSummary();
-    renderPendingBadge(pendingQueue.length);
+    try {
+      await handleIncomingOperation(processSms(sms));
+      await refreshSummary();
+      renderPendingBadge(pendingQueue.length);
+      // El SMS se elimina de la cola nativa solo despues de procesarlo.
+      await ackIncomingSms(sms);
+    } catch (err) {
+      console.error('Error procesando SMS entrante; queda en cola nativa:', err);
+    }
   });
 
   if (!onboardingCompleted) {
@@ -168,6 +176,9 @@ async function startApp() {
   } else {
     await syncSmsHistory();
   }
+
+  // Recupera SMS que llegaron mientras el WebView estaba cerrado o muerto.
+  await syncPendingIncomingSms();
 
   await refreshSummary();
   await refreshGroups();
@@ -203,6 +214,27 @@ async function syncSmsHistory() {
     const allSms = await readAllSms();
     const operations = processSmsBatch(allSms);
     for (const op of operations) await handleIncomingOperation(op);
+    renderPendingBadge(pendingQueue.length);
+  } finally {
+    hideLoader();
+  }
+}
+
+async function syncPendingIncomingSms() {
+  const queuedSms = await readPendingIncomingSms();
+  if (!queuedSms.length) return;
+
+  showLoader('Procesando SMS recibidos…');
+  try {
+    for (const sms of queuedSms) {
+      try {
+        const op = processSms(sms);
+        await handleIncomingOperation(op);
+        await ackIncomingSms(sms);
+      } catch (err) {
+        console.error('No se pudo procesar SMS pendiente; se conserva en cola:', err);
+      }
+    }
     renderPendingBadge(pendingQueue.length);
   } finally {
     hideLoader();
@@ -472,6 +504,7 @@ function wireNavigation() {
   };
   document.getElementById('btn-refresh').onclick = async () => {
     await syncSmsHistory();
+    await syncPendingIncomingSms();
     await refreshSummary();
     await refreshGroups();
   };

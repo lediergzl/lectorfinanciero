@@ -1,0 +1,13 @@
+{
+  "appId": "cu.lectortransferencias.app",
+  "appName": "Lector de Transferencias",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": true
+  },
+  "plugins": {
+    "CapacitorSQLite": {
+      "androidIsEncryption": false
+    }
+  }
+}

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Lector de Transferencias</title>
+  <!--
+    Aplica el tema guardado ANTES de pintar la página, para evitar el
+    parpadeo de "oscuro y luego claro" al abrir la app. Es un script
+    normal (no type="module"), así que corre de inmediato y en orden,
+    antes de que se cargue la hoja de estilos.
+  -->
+  <script>
+    (function () {
+      var saved = localStorage.getItem('theme');
+      var theme = saved === 'light' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', theme);
+    })();
+  </script>
+  <link rel="stylesheet" href="/src/ui/styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <h1>Lector de Transferencias</h1>
+      <div class="topbar-actions">
+        <button id="btn-theme-toggle" class="icon-btn" title="Cambiar tema">🌙</button>
+        <button id="btn-settings" class="icon-btn" title="Ajustes">⚙</button>
+      </div>
+    </header>
+
+    <!-- Pantalla de permisos: aparece siempre que falte READ_SMS/RECEIVE_SMS -->
+    <section id="permission-screen" class="screen hidden">
+      <div class="permission-card">
+        <div class="permission-icon">📩</div>
+        <h2>Permisos necesarios</h2>
+        <p>
+          Para detectar tus transferencias automáticamente, la app
+          necesita leer tus SMS (historial y mensajes nuevos). No se
+          comparte nada con servidores externos: todo se procesa y
+          guarda solo en tu teléfono.
+        </p>
+        <button id="btn-request-permissions">Conceder permisos</button>
+
+        <p id="permission-denied-hint" class="hint-text hidden">
+          El permiso de SMS está desactivado y Android ya no permite
+          pedirlo de nuevo desde la app. Toca el botón de abajo para ir
+          directo a los ajustes del sistema y activarlo manualmente
+          (Permisos → SMS → Permitir).
+        </p>
+        <button id="btn-open-settings" class="secondary hidden">Abrir ajustes del teléfono</button>
+      </div>
+    </section>
+
+    <section id="main-screen" class="screen hidden">
+      <div class="month-nav">
+        <button id="btn-prev-month" class="icon-btn" aria-label="Mes anterior">‹</button>
+        <span id="current-month-label">—</span>
+        <button id="btn-next-month" class="icon-btn" aria-label="Mes siguiente">›</button>
+      </div>
+
+      <div class="summary-card">
+        <div class="summary-row"><span>Ingresos</span><strong id="sum-in" class="amount-in">0</strong></div>
+        <div class="summary-row"><span>Gastos</span><strong id="sum-out" class="amount-out">0</strong></div>
+        <div class="summary-row balance"><span>Balance</span><strong id="sum-balance">0</strong></div>
+      </div>
+
+      <button id="btn-open-pending" class="pending-btn">
+        📋 Pendientes por etiquetar
+        <span id="pending-badge" class="badge">0</span>
+      </button>
+
+      <h2 class="section-title">Por persona</h2>
+      <div class="card">
+        <ul id="contact-list" class="list"></ul>
+      </div>
+
+      <!-- Grupos -->
+      <h2 class="section-title">Grupos</h2>
+      <div class="card">
+        <ul id="groups-list" class="list"></ul>
+      </div>
+      <div class="action-row two-col">
+        <button id="btn-new-group" class="secondary">+ Nuevo grupo</button>
+        <button id="btn-manage-contacts" class="secondary">Gestionar contactos</button>
+      </div>
+
+      <!-- Filtro por día -->
+      <h2 class="section-title">Buscar por día</h2>
+      <div class="card day-filter-row">
+        <input id="day-filter-input" type="date" />
+        <button id="btn-day-filter">Ver día</button>
+      </div>
+
+      <div class="action-row">
+        <button id="btn-refresh" class="secondary">Actualizar (leer SMS nuevos)</button>
+        <button id="btn-reset" class="secondary danger">Borrar todo (poner en blanco)</button>
+      </div>
+    </section>
+
+    <!-- Diálogo modal: "¿Quién es?" -->
+    <div id="who-is-modal" class="modal hidden">
+      <div class="modal-content">
+        <h3>Nueva transferencia detectada</h3>
+        <p id="who-is-details"></p>
+        <span id="who-is-direction" class="direction-badge"></span>
+        <div class="quick-options" id="quick-options">
+          <button data-cat="Familiar">👤 Familiar</button>
+          <button data-cat="Amigo">🧑‍🤝‍🧑 Amigo</button>
+          <button data-cat="Negocio">🏪 Negocio</button>
+          <button data-cat="Cliente">💼 Cliente</button>
+        </div>
+        <input id="who-is-name" type="text" placeholder="Nombre (ej. María)" />
+        <button id="btn-save-contact">Guardar como nuevo contacto</button>
+
+        <div id="who-is-associate-row" class="hidden">
+          <div class="modal-divider"><span>o asociar a un contacto existente</span></div>
+          <p class="hint-text">
+            Útil si esta tarjeta/teléfono es de alguien que ya tienes
+            guardado (una misma persona puede tener varias tarjetas).
+          </p>
+          <select id="who-is-existing-select"></select>
+          <button id="btn-associate-existing" class="secondary">Asociar a este contacto</button>
+        </div>
+
+        <div class="modal-divider"><span>o bien</span></div>
+
+        <p class="hint-text">
+          Puedes omitir esta transferencia sin catalogarla. "Por ahora"
+          la vuelve a preguntar en la próxima actualización; "Siempre"
+          hace que nunca más se pregunte por este SMS.
+        </p>
+        <div class="skip-buttons">
+          <button id="btn-skip-once" class="secondary">Omitir por ahora</button>
+          <button id="btn-skip-forever" class="secondary danger">Omitir siempre</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Diálogo modal: transacciones de un día concreto -->
+    <div id="day-modal" class="modal hidden">
+      <div class="modal-content">
+        <h3 id="day-modal-title">Transferencias del día</h3>
+        <ul id="day-transactions-list" class="list"></ul>
+        <button id="btn-close-day-modal" class="secondary">Cerrar</button>
+      </div>
+    </div>
+
+    <!-- Diálogo modal: ajustes -->
+    <div id="settings-modal" class="modal hidden">
+      <div class="modal-content">
+        <h3>Ajustes</h3>
+        <p class="hint-text">
+          <strong>Entrantes</strong>: transferencias que TE hacen a ti.<br />
+          <strong>Salientes</strong>: transferencias que TÚ haces.
+        </p>
+        <label class="toggle-row">
+          <input id="settings-catchall-toggle" type="checkbox" />
+          <span>Procesar todas las transferencias en una sola categoría (sin preguntar cada vez)</span>
+        </label>
+        <input id="settings-catchall-alias" type="text" placeholder="Nombre a mostrar (ej. Negocio)" />
+        <input id="settings-catchall-category" type="text" placeholder="Categoría (ej. Negocio)" />
+
+        <div class="modal-divider"><span>indexado</span></div>
+        <p class="hint-text">
+          Ignora cualquier transferencia anterior a esta fecha. Déjalo
+          vacío para indexar todo el historial de SMS del teléfono.
+        </p>
+        <label class="field-label" for="settings-index-since">Indexar desde</label>
+        <input id="settings-index-since" type="date" />
+
+        <button id="btn-save-settings">Guardar ajustes</button>
+        <button id="btn-close-settings" class="secondary">Cerrar</button>
+      </div>
+    </div>
+
+    <!-- Diálogo modal: nuevo grupo -->
+    <div id="new-group-modal" class="modal hidden">
+      <div class="modal-content">
+        <h3>Nuevo grupo</h3>
+        <input id="new-group-name" type="text" placeholder="Nombre del grupo (ej. Familia)" />
+        <button id="btn-create-group">Crear grupo</button>
+        <button id="btn-close-new-group" class="secondary">Cancelar</button>
+      </div>
+    </div>
+
+    <!-- Diálogo modal: estadísticas de un grupo -->
+    <div id="group-stats-modal" class="modal hidden">
+      <div class="modal-content">
+        <h3 id="group-stats-title">Grupo</h3>
+        <div class="summary-card">
+          <div class="summary-row"><span>Ingresos</span><strong id="group-stats-in" class="amount-in">0</strong></div>
+          <div class="summary-row"><span>Gastos</span><strong id="group-stats-out" class="amount-out">0</strong></div>
+          <div class="summary-row balance"><span>Balance</span><strong id="group-stats-balance">0</strong></div>
+        </div>
+        <h2 class="section-title">Por persona</h2>
+        <ul id="group-stats-list" class="list"></ul>
+        <button id="btn-close-group-stats" class="secondary">Cerrar</button>
+      </div>
+    </div>
+
+    <!-- Diálogo modal: gestionar contactos (asignar grupo, ver tarjetas) -->
+    <div id="contacts-modal" class="modal hidden">
+      <div class="modal-content">
+        <h3>Contactos</h3>
+        <ul id="contacts-list" class="list"></ul>
+        <button id="btn-close-contacts" class="secondary">Cerrar</button>
+      </div>
+    </div>
+
+    <!-- Diálogo modal: transferencias sin etiquetar, por día y paginadas -->
+    <div id="pending-modal" class="modal hidden">
+      <div class="modal-content">
+        <h3>Transferencias sin etiquetar</h3>
+        <input id="pending-day-input" type="date" />
+        <p id="pending-day-summary" class="hint-text"></p>
+        <ul id="pending-list" class="list"></ul>
+        <div class="pagination-row">
+          <button id="btn-pending-prev" class="tiny-btn">‹ Anterior</button>
+          <span id="pending-page-label">Página 1 de 1</span>
+          <button id="btn-pending-next" class="tiny-btn">Siguiente ›</button>
+        </div>
+        <button id="btn-close-pending" class="secondary">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

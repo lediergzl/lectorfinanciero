@@ -86,18 +86,30 @@ export function initThemeToggle() {
  * Requisito: "ajustes con fecha de inicio de indexado". Se reutiliza el
  * mismo modal de ajustes existente, añadiendo el campo de fecha.
  */
-export function showSettingsModal(currentSettings, onSave) {
+export function showSettingsModal(currentSettings, onSave, options = {}) {
+  const { forceChoice = false } = options;
   const modal = document.getElementById('settings-modal');
   const toggle = document.getElementById('settings-catchall-toggle');
   const aliasInput = document.getElementById('settings-catchall-alias');
   const categoryInput = document.getElementById('settings-catchall-category');
   const indexSinceInput = document.getElementById('settings-index-since');
   const saveBtn = document.getElementById('btn-save-settings');
+  const closeBtn = document.getElementById('btn-close-settings');
+  const onboardingNotice = document.getElementById('settings-onboarding-notice');
 
   toggle.checked = !!currentSettings.enabled;
   aliasInput.value = currentSettings.alias || 'Negocio';
   categoryInput.value = currentSettings.category || 'Negocio';
   if (indexSinceInput) indexSinceInput.value = currentSettings.indexSinceDate || '';
+
+  // Requisito: "al cargar la apk por primera vez no debemos indexar
+  // nada; primero se muestra la configuración para que el usuario
+  // elija a partir de cuándo quiere indexar". En ese caso el modal se
+  // muestra sin botón de cerrar (obligatorio guardar para continuar)
+  // y con un aviso explicando por qué aparece.
+  if (onboardingNotice) onboardingNotice.classList.toggle('hidden', !forceChoice);
+  if (closeBtn) closeBtn.classList.toggle('hidden', forceChoice);
+  saveBtn.textContent = forceChoice ? 'Empezar a indexar' : 'Guardar ajustes';
 
   modal.classList.remove('hidden');
 
@@ -110,7 +122,9 @@ export function showSettingsModal(currentSettings, onSave) {
     onSave({ enabled, alias, category, indexSinceDate });
   };
 
-  document.getElementById('btn-close-settings').onclick = () => modal.classList.add('hidden');
+  if (closeBtn) {
+    closeBtn.onclick = forceChoice ? null : () => modal.classList.add('hidden');
+  }
 }
 
 /**

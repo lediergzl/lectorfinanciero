@@ -540,6 +540,23 @@ export async function setIndexSinceDate(dateStr) {
 }
 
 /**
+ * Requisito: "al cargar la apk por primera vez no debemos indexar
+ * nada; primero se le muestra al usuario la configuración para que
+ * elija a partir de cuándo quiere indexar". Este flag marca si el
+ * usuario ya pasó por esa pantalla de configuración inicial al menos
+ * una vez (independientemente de qué fecha haya elegido, incluso si
+ * decide indexar todo el historial).
+ */
+export async function getOnboardingCompleted() {
+  const value = await getSetting('onboarding_completed', '0');
+  return value === '1';
+}
+
+export async function setOnboardingCompleted() {
+  await setSetting('onboarding_completed', '1');
+}
+
+/**
  * Devuelve (creando si hace falta) el contacto único usado por el
  * "modo una sola categoría". Todas las transferencias entrantes y
  * salientes de remitentes/cuentas desconocidos se agrupan aquí.

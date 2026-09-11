@@ -29,6 +29,8 @@ import {
   setCatchAllSettings,
   getIndexSinceDate,
   setIndexSinceDate,
+  getOnboardingCompleted,
+  setOnboardingCompleted,
   findOrCreateCatchAllContact,
   resetAllData,
   createGroup,
@@ -71,12 +73,14 @@ let pendingPage = 0;
 let catchAll = { enabled: false, alias: 'Negocio', category: 'Negocio' };
 let indexSinceDate = null; // 'YYYY-MM-DD' o null (sin límite)
 let indexSinceCutoffIso = null;
+let onboardingCompleted = false;
 
 async function bootstrap() {
   initThemeToggle(); // no depende de la BD, se conecta de inmediato
   await initDatabase();
   catchAll = await getCatchAllSettings();
   await loadIndexSinceCutoff();
+  onboardingCompleted = await getOnboardingCompleted();
 
   const now = new Date();
   currentYear = now.getFullYear();
@@ -181,19 +185,57 @@ async function startApp() {
   showScreen('main-screen');
   wireNavigation();
 
-  // Lectura inicial del historial completo de SMS.
-  await syncSmsHistory();
-
-  // Escucha de SMS nuevos en tiempo real.
+  // Escucha de SMS nuevos en tiempo real. Se conecta siempre, incluso
+  // antes de terminar el onboarding, por si llega algo justo en ese
+  // instante (handleIncomingOperation ya respeta indexSinceCutoffIso).
   addIncomingSmsListener(async (sms) => {
     await handleIncomingOperation(processSms(sms));
     await refreshSummary();
-    refreshPendingBadge(pendingQueue.length);
+    renderPendingBadge(pendingQueue.length);
   });
+
+  // Requisito: "al cargar la apk por primera vez no debemos indexar
+  // nada; primero se le muestra al usuario la configuración para que
+  // elija a partir de cuándo quiere indexar". Solo se lee el
+  // historial de SMS después de que el usuario guarde esa elección.
+  if (!onboardingCompleted) {
+    await runFirstLaunchSetup();
+  } else {
+    await syncSmsHistory();
+  }
 
   await refreshSummary();
   await refreshGroups();
-  refreshPendingBadge(pendingQueue.length);
+  renderPendingBadge(pendingQueue.length);
+}
+
+/**
+ * Muestra el modal de ajustes en modo obligatorio (sin botón de
+ * cerrar) para que el usuario elija desde cuándo indexar antes de
+ * leer ningún SMS del historial. Al guardar, se persiste la elección,
+ * se marca el onboarding como completado y recién ahí se sincroniza.
+ */
+function runFirstLaunchSetup() {
+  return new Promise((resolve) => {
+    showSettingsModal(
+      { ...catchAll, indexSinceDate },
+      async (newSettings) => {
+        catchAll = { enabled: newSettings.enabled, alias: newSettings.alias, category: newSettings.category };
+        await setCatchAllSettings(catchAll);
+
+        indexSinceDate = newSettings.indexSinceDate;
+        await setIndexSinceDate(indexSinceDate);
+        await loadIndexSinceCutoff();
+
+        await setOnboardingCompleted();
+        onboardingCompleted = true;
+
+        await syncSmsHistory();
+        resolve();
+      },
+      { forceChoice: true }
+    );
+  });
 }
 
 async function syncSmsHistory() {
@@ -203,7 +245,7 @@ async function syncSmsHistory() {
   for (const op of operations) {
     await handleIncomingOperation(op);
   }
-  refreshPendingBadge(pendingQueue.length);
+  renderPendingBadge(pendingQueue.length);
 }
 
 /**
@@ -281,7 +323,7 @@ async function handleReset() {
   pendingQueue = [];
   await refreshSummary();
   await refreshGroups();
-  refreshPendingBadge(0);
+  renderPendingBadge(0);
   alert('Listo, la app quedó en blanco.');
 }
 
@@ -407,7 +449,7 @@ async function removeFromPending(op) {
   pendingQueue = pendingQueue.filter((o) => o.smsHash !== op.smsHash);
   await refreshSummary();
   await refreshGroups();
-  refreshPendingBadge(pendingQueue.length);
+  renderPendingBadge(pendingQueue.length);
   renderPendingScreenView(); // refresca la lista/paginador del mismo día
 }
 

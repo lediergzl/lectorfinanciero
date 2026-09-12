@@ -1,7 +1,7 @@
 @echo off
 REM sync-android.bat
 REM Script completo: sincroniza la fuente web, sincroniza Capacitor,
-REM compila Debug/Release/Ambos y firma opcionalmente.
+REM aplica icono, compila Debug/Release/Ambos y firma opcionalmente.
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
@@ -11,6 +11,9 @@ set "WWW_DIR=%PROJECT_ROOT%\www"
 set "ASSETS_DIR=%ANDROID_DIR%\app\src\main\assets\public"
 set "CONFIG_FILE=%PROJECT_ROOT%\capacitor.config.json"
 set "CONFIG_DEST=%ANDROID_DIR%\app\src\main\assets\capacitor.config.json"
+set "RES_DIR=%ANDROID_DIR%\app\src\main\res"
+set "ICONS_SRC=%PROJECT_ROOT%\assets"
+set "ICON_FILE=%ICONS_SRC%\logo.png"
 set "KEY_ALIAS=yode86"
 set "UNSIGNED_APK=%ANDROID_DIR%\app\build\outputs\apk\release\app-release-unsigned.apk"
 set "SIGNED_APK=%PROJECT_ROOT%\app-release.apk"
@@ -101,7 +104,7 @@ if errorlevel 1 (
     exit /b 1
 )
 echo [OK] Sincronizacion completa terminada.
-goto ChooseBuild
+goto ApplyIcons
 
 :WebOnly
 echo.
@@ -141,9 +144,55 @@ if errorlevel 1 (
 )
 
 echo [OK] Archivos web y configuracion Android actualizados.
+goto ApplyIcons
 
 REM --------------------------------------------------------
-REM PASO 3: Escoger tipo de build
+REM PASO 3: Aplicar icono personalizado
+REM --------------------------------------------------------
+REM Fuente: %ICON_FILE%  (por defecto: PROJECT_ROOT\assets\logo.png)
+REM Copia el mismo PNG a las 5 densidades mipmap-* como
+REM ic_launcher.png e ic_launcher_round.png. Android escala
+REM solo. Si el archivo no existe, se omite sin romper nada.
+
+:ApplyIcons
+echo.
+echo -^> Aplicando icono personalizado...
+
+if not exist "%ICON_FILE%" (
+    echo [SKIP] No existe "%ICON_FILE%", se omite el reemplazo de icono.
+    goto ChooseBuild
+)
+
+if not exist "%RES_DIR%" (
+    echo [WARN] No existe "%RES_DIR%", se omite el reemplazo de icono.
+    goto ChooseBuild
+)
+
+set "DENSITIES=mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi"
+set "ICON_COUNT=0"
+
+for %%d in (%DENSITIES%) do (
+    if not exist "%RES_DIR%\%%d" mkdir "%RES_DIR%\%%d"
+    copy /y "%ICON_FILE%" "%RES_DIR%\%%d\ic_launcher.png" >nul
+    if !errorlevel! neq 0 (
+        echo [ERROR] Fallo al copiar icono a %%d.
+        pause
+        exit /b 1
+    )
+    copy /y "%ICON_FILE%" "%RES_DIR%\%%d\ic_launcher_round.png" >nul
+    if !errorlevel! neq 0 (
+        echo [ERROR] Fallo al copiar icono redondo a %%d.
+        pause
+        exit /b 1
+    )
+    echo     [OK] %%d
+    set /a ICON_COUNT+=1
+)
+
+echo [OK] Icono aplicado a !ICON_COUNT! densidades.
+
+REM --------------------------------------------------------
+REM PASO 4: Escoger tipo de build
 REM --------------------------------------------------------
 :ChooseBuild
 echo.
@@ -161,7 +210,7 @@ if errorlevel 2 set "BUILD_TASK=assembleRelease" & set "DO_SIGN_PROMPT=1" & goto
 if errorlevel 1 set "BUILD_TASK=assembleDebug" & set "DO_SIGN_PROMPT=0" & goto Compile
 
 REM --------------------------------------------------------
-REM PASO 4: Compilacion
+REM PASO 5: Compilacion
 REM --------------------------------------------------------
 :Compile
 echo.
@@ -180,7 +229,7 @@ echo     Debug:   android\app\build\outputs\apk\debug\app-debug.apk
 echo     Release: %UNSIGNED_APK%
 
 REM --------------------------------------------------------
-REM PASO 5: Firmar (solo si se compilo Release)
+REM PASO 6: Firmar (solo si se compilo Release)
 REM --------------------------------------------------------
 if "%DO_SIGN_PROMPT%"=="0" goto End
 
@@ -278,7 +327,7 @@ call "!APKSIGNER!" verify --verbose "%SIGNED_APK%"
 echo.
 echo ========================================================
 echo   PROCESO COMPLETADO
- echo ========================================================
+echo ========================================================
 echo.
 pause
 endlocal

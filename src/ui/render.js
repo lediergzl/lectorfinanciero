@@ -202,34 +202,103 @@ export function showGroupStatsModal(group, summary, monthLabel) {
   document.getElementById('btn-close-group-stats').onclick = () => modal.classList.add('hidden');
 }
 
+/**
+ * Requisito: "cuando tengas 100 usuarios no puedes trabajar con un
+ * select por fila; mejor marcar todos los que quieres y asignarlos a
+ * un grupo". Se reemplaza el select individual por: buscador +
+ * checkboxes + "seleccionar todos" + un único botón de asignación
+ * masiva que llama a onAssignGroup(contactIds[], groupId) una sola vez.
+ */
 export function showContactsModal(contacts, groups, onAssignGroup) {
   const modal = document.getElementById('contacts-modal');
   const list = document.getElementById('contacts-list');
-  list.innerHTML = '';
+  const searchInput = document.getElementById('contacts-search');
+  const selectAllBox = document.getElementById('contacts-select-all');
+  const selectedCountEl = document.getElementById('contacts-selected-count');
+  const bulkGroupSelect = document.getElementById('contacts-bulk-group-select');
+  const bulkAssignBtn = document.getElementById('btn-bulk-assign-group');
 
-  if (!contacts.length) {
-    list.innerHTML = '<li>Todavía no tienes contactos guardados.</li>';
-  } else {
-    for (const c of contacts) {
+  const selectedIds = new Set();
+
+  bulkGroupSelect.innerHTML = ['<option value="">Sin grupo</option>']
+    .concat(groups.map((g) => `<option value="${g.id}">${g.name}</option>`))
+    .join('');
+
+  function currentFiltered() {
+    const term = (searchInput.value || '').trim().toLowerCase();
+    return term ? contacts.filter((c) => c.alias.toLowerCase().includes(term)) : contacts;
+  }
+
+  function updateBulkBar() {
+    const count = selectedIds.size;
+    selectedCountEl.textContent = count ? `(${count} seleccionados)` : '';
+    bulkAssignBtn.disabled = count === 0;
+    bulkAssignBtn.textContent = count ? `Asignar a grupo (${count})` : 'Asignar a grupo';
+  }
+
+  function renderList() {
+    const filtered = currentFiltered();
+    list.innerHTML = '';
+
+    if (!contacts.length) {
+      list.innerHTML = '<li>Todavía no tienes contactos guardados.</li>';
+      selectAllBox.checked = false;
+      return;
+    }
+
+    if (!filtered.length) {
+      list.innerHTML = '<li>No se encontraron contactos.</li>';
+      selectAllBox.checked = false;
+      return;
+    }
+
+    for (const c of filtered) {
       const li = document.createElement('li');
       li.className = 'contact-row';
-      const groupOptions = ['<option value="">Sin grupo</option>']
-        .concat(groups.map((g) => `<option value="${g.id}" ${g.id === c.group_id ? 'selected' : ''}>${g.name}</option>`))
-        .join('');
       li.innerHTML = `
-        <div class="contact-row-info">
-          <span>${c.alias}</span>
-          <small style="color:var(--text-faint)">${c.category} · ${c.card_count} ${c.card_count === 1 ? 'tarjeta' : 'tarjetas'}</small>
-        </div>
-        <select class="contact-group-select">${groupOptions}</select>
+        <label class="contact-checkbox-row">
+          <input type="checkbox" class="contact-check" ${selectedIds.has(c.id) ? 'checked' : ''} />
+          <div class="contact-row-info">
+            <span>${c.alias}</span>
+            <small style="color:var(--text-faint)">${c.category} · ${c.card_count} ${c.card_count === 1 ? 'tarjeta' : 'tarjetas'} · ${c.group_name || 'Sin grupo'}</small>
+          </div>
+        </label>
       `;
-      li.querySelector('.contact-group-select').onchange = (e) => {
-        const groupId = e.target.value ? Number(e.target.value) : null;
-        onAssignGroup(c.id, groupId);
+      const checkbox = li.querySelector('.contact-check');
+      checkbox.onchange = () => {
+        if (checkbox.checked) selectedIds.add(c.id);
+        else selectedIds.delete(c.id);
+        selectAllBox.checked = currentFiltered().every((fc) => selectedIds.has(fc.id));
+        updateBulkBar();
       };
       list.appendChild(li);
     }
+
+    selectAllBox.checked = filtered.every((fc) => selectedIds.has(fc.id));
   }
+
+  searchInput.value = '';
+  selectedIds.clear();
+  renderList();
+  updateBulkBar();
+
+  searchInput.oninput = renderList;
+
+  selectAllBox.onchange = () => {
+    const filtered = currentFiltered();
+    if (selectAllBox.checked) filtered.forEach((c) => selectedIds.add(c.id));
+    else filtered.forEach((c) => selectedIds.delete(c.id));
+    renderList();
+    updateBulkBar();
+  };
+
+  bulkAssignBtn.onclick = () => {
+    if (!selectedIds.size) return;
+    const groupId = bulkGroupSelect.value ? Number(bulkGroupSelect.value) : null;
+    const ids = Array.from(selectedIds);
+    modal.classList.add('hidden');
+    onAssignGroup(ids, groupId);
+  };
 
   modal.classList.remove('hidden');
   document.getElementById('btn-close-contacts').onclick = () => modal.classList.add('hidden');

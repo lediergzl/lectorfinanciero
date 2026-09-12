@@ -31,6 +31,7 @@ import {
   listGroups,
   deleteGroup,
   assignContactToGroup,
+  assignContactsToGroup,
   getGroupSummary
 } from './services/database.js';
 import {
@@ -483,10 +484,15 @@ async function handleDeleteGroup(group) {
   await refreshGroups();
 }
 
+/**
+ * Requisito: "con 100 usuarios necesito marcar varios y asignarlos a
+ * un grupo" — el modal ahora devuelve un array de IDs seleccionados
+ * en vez de un solo contactId, y se asignan todos de una vez.
+ */
 async function handleOpenContacts() {
   const [contacts, groups] = await Promise.all([listContacts(), listGroups()]);
-  showContactsModal(contacts, groups, async (contactId, groupId) => {
-    await assignContactToGroup(contactId, groupId);
+  showContactsModal(contacts, groups, async (contactIds, groupId) => {
+    await assignContactsToGroup(contactIds, groupId);
     await refreshGroups();
   });
 }

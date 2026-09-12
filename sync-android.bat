@@ -1,7 +1,8 @@
 @echo off
 REM sync-android.bat
 REM Script completo: sincroniza la fuente web, sincroniza Capacitor,
-REM aplica icono, compila Debug/Release/Ambos y firma opcionalmente.
+REM genera iconos/splash con capacitor-assets, compila Debug/Release/Ambos
+REM y firma opcionalmente.
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
@@ -11,9 +12,8 @@ set "WWW_DIR=%PROJECT_ROOT%\www"
 set "ASSETS_DIR=%ANDROID_DIR%\app\src\main\assets\public"
 set "CONFIG_FILE=%PROJECT_ROOT%\capacitor.config.json"
 set "CONFIG_DEST=%ANDROID_DIR%\app\src\main\assets\capacitor.config.json"
-set "RES_DIR=%ANDROID_DIR%\app\src\main\res"
-set "ICONS_SRC=%PROJECT_ROOT%\assets"
-set "ICON_FILE=%ICONS_SRC%\logo.png"
+set "CAP_ASSETS_DIR=%PROJECT_ROOT%\node_modules\@capacitor\assets"
+set "LOGO_FILE=%PROJECT_ROOT%\assets\logo.png"
 set "KEY_ALIAS=yode86"
 set "UNSIGNED_APK=%ANDROID_DIR%\app\build\outputs\apk\release\app-release-unsigned.apk"
 set "SIGNED_APK=%PROJECT_ROOT%\app-release.apk"
@@ -147,49 +147,69 @@ echo [OK] Archivos web y configuracion Android actualizados.
 goto ApplyIcons
 
 REM --------------------------------------------------------
-REM PASO 3: Aplicar icono personalizado
+REM PASO 3: Generar iconos y splash con capacitor-assets
 REM --------------------------------------------------------
-REM Fuente: %ICON_FILE%  (por defecto: PROJECT_ROOT\assets\logo.png)
-REM Copia el mismo PNG a las 5 densidades mipmap-* como
-REM ic_launcher.png e ic_launcher_round.png. Android escala
-REM solo. Si el archivo no existe, se omite sin romper nada.
+REM Verifica si @capacitor/assets esta instalado en node_modules.
+REM Si no, lo instala con npm. Luego ejecuta el generador
+REM oficial para Android. Si no hay assets\logo.png, se omite.
 
 :ApplyIcons
 echo.
-echo -^> Aplicando icono personalizado...
+echo -^> Generando iconos y splash screen con capacitor-assets...
 
-if not exist "%ICON_FILE%" (
-    echo [SKIP] No existe "%ICON_FILE%", se omite el reemplazo de icono.
+if not exist "%LOGO_FILE%" (
+    echo [SKIP] No existe "assets\logo.png", se omite la generacion.
     goto ChooseBuild
 )
 
-if not exist "%RES_DIR%" (
-    echo [WARN] No existe "%RES_DIR%", se omite el reemplazo de icono.
-    goto ChooseBuild
+where npx >nul 2>nul
+if errorlevel 1 (
+    echo [ERROR] Node/npx no esta instalado. No se pueden generar los recursos.
+    pause
+    exit /b 1
 )
 
-set "DENSITIES=mipmap-mdpi mipmap-hdpi mipmap-xhdpi mipmap-xxhdpi mipmap-xxxhdpi"
-set "ICON_COUNT=0"
+where npm >nul 2>nul
+if errorlevel 1 (
+    echo [ERROR] npm no esta instalado. No se puede instalar @capacitor/assets.
+    pause
+    exit /b 1
+)
 
-for %%d in (%DENSITIES%) do (
-    if not exist "%RES_DIR%\%%d" mkdir "%RES_DIR%\%%d"
-    copy /y "%ICON_FILE%" "%RES_DIR%\%%d\ic_launcher.png" >nul
-    if !errorlevel! neq 0 (
-        echo [ERROR] Fallo al copiar icono a %%d.
+REM --- Verificar si @capacitor/assets ya esta instalado ---
+if not exist "%CAP_ASSETS_DIR%" (
+    echo     [INFO] @capacitor/assets no esta instalado. Instalando...
+    pushd "%PROJECT_ROOT%"
+    call npm install --save-dev @capacitor/assets
+    if errorlevel 1 (
+        echo [ERROR] Fallo la instalacion de @capacitor/assets.
+        popd
         pause
         exit /b 1
     )
-    copy /y "%ICON_FILE%" "%RES_DIR%\%%d\ic_launcher_round.png" >nul
-    if !errorlevel! neq 0 (
-        echo [ERROR] Fallo al copiar icono redondo a %%d.
-        pause
-        exit /b 1
-    )
-    echo     [OK] %%d
-    set /a ICON_COUNT+=1
+    popd
+    echo     [OK] @capacitor/assets instalado.
+) else (
+    echo     [OK] @capacitor/assets ya esta instalado.
 )
 
-echo [OK] Icono aplicado a !ICON_COUNT! densidades.
+REM --- Ejecutar el generador oficial para Android ---
+echo     -^> Ejecutando capacitor-assets generate --android ...
+pushd "%PROJECT_ROOT%"
+call npx capacitor-assets generate --android ^
+    --iconBackgroundColor '#ffffff' ^
+    --iconBackgroundColorDark '#111111' ^
+    --splashBackgroundColor '#ffffff' ^
+    --splashBackgroundColorDark '#111111'
+if errorlevel 1 (
+    echo [ERROR] Fallo la generacion de recursos con capacitor-assets.
+    popd
+    pause
+    exit /b 1
+)
+popd
+
+echo [OK] Iconos y splash generados correctamente.
 
 REM --------------------------------------------------------
 REM PASO 4: Escoger tipo de build

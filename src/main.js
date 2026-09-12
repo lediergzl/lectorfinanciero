@@ -11,6 +11,7 @@ import {
   insertTransaction,
   insertPendingTransaction,
   deletePendingTransaction,
+  deletePendingTransactionsBatch,
   listPendingTransactions,
   getCatchAllContact,
   getTransactionsForContact,
@@ -283,6 +284,26 @@ async function processOperationsBatch(ops) {
   pendingQueue.push(...toInsertPending);
 }
 
+/**
+ * Fix: al activar el modo "una sola categoría" (catch-all), las
+ * transferencias que ya estaban en la bandeja de "Pendientes por
+ * etiquetar" se quedaban ahí para siempre, porque activar el toggle
+ * solo guardaba el ajuste sin volver a procesar lo ya pendiente. Esta
+ * función mueve TODO lo que está en pendingQueue hacia el contacto
+ * catch-all en una sola llamada batch, y vacía la cola/bandeja.
+ */
+async function reprocessPendingForCatchAll() {
+  if (!catchAll.enabled || !pendingQueue.length) return;
+
+  const contact = await findOrCreateCatchAllContact(catchAll.alias, catchAll.category);
+  const rows = pendingQueue.map((op) => ({ op, contactId: contact.id }));
+
+  await insertTransactionsBatch(rows);
+  await deletePendingTransactionsBatch(pendingQueue.map((op) => op.smsHash));
+
+  pendingQueue = [];
+}
+
 async function syncPendingIncomingSms() {
   const queuedSms = await readPendingIncomingSms();
   if (!queuedSms.length) return;
@@ -361,6 +382,18 @@ function handleOpenSettings() {
     indexSinceDate = newSettings.indexSinceDate;
     await setIndexSinceDate(indexSinceDate);
     await loadIndexSinceCutoff();
+
+    // Fix: si se activó "una sola categoría", reprocesar de inmediato
+    // todo lo que ya estaba pendiente por etiquetar, para que la
+    // bandeja de pendientes refleje 0 en vez de seguir mostrando las
+    // mismas transferencias.
+    if (catchAll.enabled) {
+      await reprocessPendingForCatchAll();
+    }
+
+    await refreshSummary();
+    await refreshGroups();
+    renderPendingBadge(pendingQueue.length);
   });
 }
 
@@ -384,6 +417,27 @@ function getPendingForDay(dateStr) {
     .sort((a, b) => (a.date < b.date ? -1 : 1));
 }
 
+/**
+ * Fix: antes se tomaba siempre days[0] (el primer día del mes en
+ * orden ascendente con pendientes), lo cual no tiene relación con
+ * "hoy". Ahora se prioriza: el día de hoy si tiene pendientes, si no
+ * el día más reciente ANTERIOR a hoy con pendientes, y como último
+ * recurso el primer día disponible del mes (por si todo lo pendiente
+ * quedara en el futuro, caso raro pero se cubre).
+ */
+function pickDefaultPendingDate(dayCounts) {
+  const days = Object.keys(dayCounts).sort();
+  if (!days.length) return null;
+
+  const today = todayDateStr();
+  if (dayCounts[today]) return today;
+
+  const before = days.filter((d) => d < today);
+  if (before.length) return before[before.length - 1];
+
+  return days[0];
+}
+
 function handleOpenPending() {
   const now = new Date();
   pendingViewYear = now.getFullYear();
@@ -395,10 +449,9 @@ function handleOpenPending() {
 
 function renderPendingScreenView() {
   const dayCounts = getPendingDayCountsForMonth(pendingViewYear, pendingViewMonth);
-  const days = Object.keys(dayCounts).sort();
 
   if (!pendingViewDate || !dayCounts[pendingViewDate]) {
-    pendingViewDate = days.length ? days[0] : null;
+    pendingViewDate = pickDefaultPendingDate(dayCounts);
     pendingPage = 0;
   }
 

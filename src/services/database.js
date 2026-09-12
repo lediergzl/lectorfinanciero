@@ -396,6 +396,27 @@ export async function deletePendingTransaction(smsHash) {
   });
 }
 
+/**
+ * Borra en una sola llamada nativa varias filas de pending_transactions
+ * por su sms_hash. Se usa, por ejemplo, al activar el modo "una sola
+ * categoría" (catch-all) para vaciar de golpe la bandeja de pendientes
+ * que ya fueron reprocesados hacia el contacto catch-all, en vez de
+ * hacer un DELETE por fila.
+ */
+export async function deletePendingTransactionsBatch(smsHashes) {
+  const unique = Array.from(new Set((smsHashes || []).filter(Boolean)));
+  if (!unique.length) return;
+  const placeholders = unique.map(() => '?').join(',');
+  await sqlite().run({
+    database: DB_NAME,
+    statement: `DELETE FROM pending_transactions WHERE sms_hash IN (${placeholders})`,
+    values: unique,
+    transaction: true,
+    readonly: false,
+    returnMode: 'no'
+  });
+}
+
 export async function listPendingTransactions() {
   const res = await sqlite().query({
     database: DB_NAME,

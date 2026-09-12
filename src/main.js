@@ -32,7 +32,11 @@ import {
   deleteGroup,
   assignContactToGroup,
   assignContactsToGroup,
-  getGroupSummary
+  getGroupSummary,
+  filterSkippedSms,
+  findContactsByIdentifiers,
+  insertTransactionsBatch,
+  insertPendingTransactionsBatch
 } from './services/database.js';
 import {
   requestSmsPermissions,
@@ -60,10 +64,16 @@ import {
   showPendingModal,
   showLoader,
   hideLoader,
+  updateLoaderProgress,
   showReclassifyModal
 } from './ui/render.js';
 
 const PENDING_PAGE_SIZE = 8;
+// Tamaño de lote para la indexación masiva del historial de SMS. Con
+// miles de SMS, procesarlos uno por uno (un await de plugin nativo por
+// SMS) congelaba el loader; en lotes de este tamaño se usa executeSet
+// (una sola llamada nativa por lote) y se cede el hilo entre lotes.
+const SMS_CHUNK_SIZE = 150;
 
 let currentYear;
 let currentMonth;
@@ -210,15 +220,67 @@ function runFirstLaunchSetup() {
 }
 
 async function syncSmsHistory() {
-  showLoader('Leyendo e indexando SMS…');
+  showLoader('Leyendo SMS del historial…');
   try {
     const allSms = await readAllSms();
-    const operations = processSmsBatch(allSms);
-    for (const op of operations) await handleIncomingOperation(op);
+    const total = allSms.length;
+    showLoader('Indexando transferencias…');
+    updateLoaderProgress(0, total);
+
+    for (let i = 0; i < allSms.length; i += SMS_CHUNK_SIZE) {
+      const chunk = allSms.slice(i, i + SMS_CHUNK_SIZE);
+      const ops = processSmsBatch(chunk);
+      await processOperationsBatch(ops);
+      updateLoaderProgress(Math.min(i + SMS_CHUNK_SIZE, total), total);
+      // Cede el hilo principal entre lotes para que el navegador
+      // repinte el loader (progreso, spinner); sin esto, miles de
+      // awaits secuenciales bloquean la UI de punta a punta.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
     renderPendingBadge(pendingQueue.length);
   } finally {
     hideLoader();
   }
+}
+
+/**
+ * Procesa un lote de operaciones YA parseadas con el mínimo de
+ * round-trips a SQLite: una consulta para SMS omitidos, una para
+ * resolver contactos existentes, y un executeSet para insertar
+ * transacciones directas + otro para pendientes. Antes se hacía un
+ * await por SMS (uno por uno) vía handleIncomingOperation, que era
+ * justo lo que congelaba el loader con miles de mensajes.
+ */
+async function processOperationsBatch(ops) {
+  const candidates = ops.filter((op) => !(indexSinceCutoffIso && op.date < indexSinceCutoffIso));
+  if (!candidates.length) return;
+
+  const skipped = await filterSkippedSms(candidates.map((op) => op.smsHash));
+  const toProcess = candidates.filter((op) => !skipped.has(op.smsHash));
+  if (!toProcess.length) return;
+
+  const toInsertDirect = [];
+  const toInsertPending = [];
+
+  if (catchAll.enabled) {
+    const contact = await findOrCreateCatchAllContact(catchAll.alias, catchAll.category);
+    for (const op of toProcess) toInsertDirect.push({ op, contactId: contact.id });
+  } else {
+    const contactMap = await findContactsByIdentifiers(toProcess.map((op) => op.identifier));
+    for (const op of toProcess) {
+      const contact = contactMap.get(op.identifier);
+      if (contact) {
+        toInsertDirect.push({ op, contactId: contact.id });
+      } else if (!pendingQueue.some((o) => o.smsHash === op.smsHash)) {
+        toInsertPending.push(op);
+      }
+    }
+  }
+
+  await insertTransactionsBatch(toInsertDirect);
+  await insertPendingTransactionsBatch(toInsertPending);
+  pendingQueue.push(...toInsertPending);
 }
 
 async function syncPendingIncomingSms() {

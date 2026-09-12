@@ -1,25 +1,10 @@
 /**
  * smsReader.js
- * Envoltorio JS sobre el plugin nativo personalizado `SmsReader`
- * (ver android-plugin/ para el código Java).
+ * Envoltorio JS sobre el plugin nativo personalizado `SmsReader`.
  *
- * MIGRACIÓN SIN NODE/TYPESCRIPT: antes se usaba
- * `import { registerPlugin } from '@capacitor/core'`, que requería tener
- * el paquete npm instalado para poder compilar el bundle con Vite.
- *
- * IMPORTANTE: el runtime nativo de Android (native-bridge.js) SOLO
- * inyecta un `window.Capacitor` básico (platform, isNativePlatform,
- * etc.) — la función `registerPlugin` (la que realmente crea el proxy
- * que conecta un método de JS con su método nativo en Java) vive en el
- * paquete `@capacitor/core`, no la pone el bridge nativo por sí solo.
- * Por eso vendorizamos ese archivo (es JS puro, sin dependencias) en
- * `src/vendor/capacitor-core.js` y lo importamos con una ruta relativa,
- * sin necesitar `npm install` ni ningún bundler.
- *
- * Expone:
- *  - requestPermissions(): pide RECEIVE_SMS y READ_SMS
- *  - readAllSms(): lee el historial completo de SMS del dispositivo
- *  - addIncomingListener(cb): se suscribe a SMS nuevos en tiempo real
+ * Expone permisos, lectura del historial y escucha de SMS entrantes.
+ * Los SMS recibidos por Android se persisten nativamente antes de emitir
+ * el evento, por lo que no se pierden si el WebView muere entre ambos pasos.
  */
 import { registerPlugin } from '../vendor/capacitor-core.js';
 
@@ -27,7 +12,6 @@ const SmsReaderPlugin = registerPlugin('SmsReader');
 
 export async function requestSmsPermissions() {
   const result = await SmsReaderPlugin.requestPermissions();
-  // result: { receiveSms: 'granted'|'denied', readSms: 'granted'|'denied' }
   return result;
 }
 
@@ -35,28 +19,37 @@ export async function checkSmsPermissions() {
   return SmsReaderPlugin.checkPermissions();
 }
 
-/**
- * Abre la pantalla de ajustes de ESTA app en el sistema Android
- * (donde vive el interruptor de permisos), para cuando Android ya no
- * deja mostrar el diálogo nativo de permisos (denegación permanente).
- */
 export async function openAppSettings() {
   return SmsReaderPlugin.openAppSettings();
 }
 
-/**
- * Lee el historial de SMS ya existentes en el dispositivo (ContentResolver).
- * Devuelve un array de { address, body, date } (date en ms epoch).
- */
 export async function readAllSms() {
   const { messages } = await SmsReaderPlugin.readAllSms();
   return messages;
 }
 
 /**
- * Se suscribe a SMS entrantes en tiempo real (BroadcastReceiver nativo).
- * `callback` recibe un objeto { address, body, date }.
- * Devuelve una función para cancelar la suscripción.
+ * Devuelve SMS recibidos mientras el WebView no estaba activo.
+ */
+export async function readPendingIncomingSms() {
+  const { messages } = await SmsReaderPlugin.getPendingIncomingSms();
+  return messages;
+}
+
+/**
+ * Confirma que un SMS ya fue procesado por JS y puede salir de la cola nativa.
+ */
+export async function ackIncomingSms(sms) {
+  return SmsReaderPlugin.ackIncomingSms({
+    address: sms?.address ?? '',
+    body: sms?.body ?? '',
+    date: sms?.date ?? 0
+  });
+}
+
+/**
+ * Se suscribe a SMS entrantes en tiempo real.
+ * El receiver nativo persiste primero y despues emite este evento.
  */
 export function addIncomingSmsListener(callback) {
   const handle = SmsReaderPlugin.addListener('smsReceived', (data) => {

@@ -24,11 +24,27 @@ export function showLoader(message = 'Indexando transferencias…') {
     el = document.createElement('div');
     el.id = 'global-loader';
     el.className = 'loader-overlay hidden';
-    el.innerHTML = '<div class="loader-box"><div class="spinner"></div><p class="loader-text"></p></div>';
+    el.innerHTML =
+      '<div class="loader-box"><div class="spinner"></div>' +
+      '<p class="loader-text"></p><p class="loader-progress hint-text"></p></div>';
     document.body.appendChild(el);
   }
   el.querySelector('.loader-text').textContent = message;
+  el.querySelector('.loader-progress').textContent = '';
   el.classList.remove('hidden');
+}
+
+/**
+ * Actualiza el contador de progreso del loader (ej. "1.350 / 4.200
+ * SMS"). Se llama entre lotes durante la indexación masiva para que
+ * el usuario vea que la app sigue viva y cuánto falta.
+ */
+export function updateLoaderProgress(current, total) {
+  const el = document.getElementById('global-loader');
+  const progressEl = el && el.querySelector('.loader-progress');
+  if (progressEl && total) {
+    progressEl.textContent = `${current.toLocaleString('es-CU')} / ${total.toLocaleString('es-CU')} SMS`;
+  }
 }
 
 export function hideLoader() {

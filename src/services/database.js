@@ -617,3 +617,116 @@ export async function resetAllData() {
     readonly: false
   });
 }
+
+// --- BATCH: indexación masiva de SMS (evita 1 round-trip nativo por SMS) ---
+
+/**
+ * Dado un array de smsHash, devuelve el Set de los que YA están
+ * marcados como "omitidos siempre". Reemplaza N llamadas a
+ * isSmsSkipped() por una sola consulta con IN (...).
+ */
+export async function filterSkippedSms(smsHashes) {
+  const unique = Array.from(new Set(smsHashes));
+  if (!unique.length) return new Set();
+  const placeholders = unique.map(() => '?').join(',');
+  const res = await sqlite().query({
+    database: DB_NAME,
+    statement: `SELECT sms_hash FROM skipped_sms WHERE sms_hash IN (${placeholders})`,
+    values: unique
+  });
+  return new Set((res.values || []).map((r) => r.sms_hash));
+}
+
+/**
+ * Resuelve contactos existentes para un lote de identificadores de una
+ * sola vez (identificador original o tarjeta adicional), en vez de un
+ * findContactByIdentifier() por SMS.
+ */
+export async function findContactsByIdentifiers(identifiers) {
+  const unique = Array.from(new Set(identifiers.filter(Boolean)));
+  if (!unique.length) return new Map();
+  const placeholders = unique.map(() => '?').join(',');
+
+  const direct = await sqlite().query({
+    database: DB_NAME,
+    statement: `SELECT * FROM contacts WHERE identifier IN (${placeholders})`,
+    values: unique
+  });
+  const viaCard = await sqlite().query({
+    database: DB_NAME,
+    statement: `SELECT c.*, ci.identifier AS matched_identifier
+                FROM contact_identifiers ci
+                JOIN contacts c ON c.id = ci.contact_id
+                WHERE ci.identifier IN (${placeholders})`,
+    values: unique
+  });
+
+  const map = new Map();
+  for (const c of direct.values || []) map.set(c.identifier, c);
+  for (const c of viaCard.values || []) map.set(c.matched_identifier, c);
+  return map;
+}
+
+/**
+ * Inserta muchas transacciones en UNA sola llamada nativa. `rows` es
+ * [{ op, contactId }]. Usa executeSet con un array de arrays en
+ * `values`, lo que activa multipleRowsStatement() en el plugin Java:
+ * arma una única sentencia INSERT con N tuplas VALUES en vez de N
+ * round-trips JS→nativo secuenciales (la causa real del congelamiento
+ * del loader con miles de SMS).
+ */
+export async function insertTransactionsBatch(rows) {
+  if (!rows.length) return;
+  await sqlite().executeSet({
+    database: DB_NAME,
+    set: [
+      {
+        statement: `INSERT OR IGNORE INTO transactions
+          (sms_hash, identifier, identifier_type, contact_id, type, amount, currency, date, raw_sms)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        values: rows.map((r) => [
+          r.op.smsHash,
+          r.op.identifier,
+          r.op.identifierType,
+          r.contactId || null,
+          r.op.type,
+          r.op.amount,
+          r.op.currency,
+          r.op.date,
+          r.op.rawText
+        ])
+      }
+    ],
+    transaction: true,
+    readonly: false,
+    returnMode: 'no'
+  });
+}
+
+/** Igual que insertTransactionsBatch pero para pending_transactions. */
+export async function insertPendingTransactionsBatch(ops) {
+  if (!ops.length) return;
+  await sqlite().executeSet({
+    database: DB_NAME,
+    set: [
+      {
+        statement: `INSERT OR IGNORE INTO pending_transactions
+          (sms_hash, identifier, identifier_type, type, amount, currency, date, raw_sms)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        values: ops.map((op) => [
+          op.smsHash,
+          op.identifier,
+          op.identifierType,
+          op.type,
+          op.amount,
+          op.currency,
+          op.date,
+          op.rawText
+        ])
+      }
+    ],
+    transaction: true,
+    readonly: false,
+    returnMode: 'no'
+  });
+}

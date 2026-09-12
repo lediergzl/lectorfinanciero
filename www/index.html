@@ -4,12 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Lector de Transferencias</title>
-  <!--
-    Aplica el tema guardado ANTES de pintar la página, para evitar el
-    parpadeo de "oscuro y luego claro" al abrir la app. Es un script
-    normal (no type="module"), así que corre de inmediato y en orden,
-    antes de que se cargue la hoja de estilos.
-  -->
   <script>
     (function () {
       var saved = localStorage.getItem('theme');
@@ -17,7 +11,7 @@
       document.documentElement.setAttribute('data-theme', theme);
     })();
   </script>
-  <link rel="stylesheet" href="/src/ui/styles.css" />
+  <link rel="stylesheet" href="src/ui/styles.css" />
 </head>
 <body>
   <div id="app">
@@ -29,7 +23,6 @@
       </div>
     </header>
 
-    <!-- Pantalla de permisos: aparece siempre que falte READ_SMS/RECEIVE_SMS -->
     <section id="permission-screen" class="screen hidden">
       <div class="permission-card">
         <div class="permission-icon">📩</div>
@@ -41,7 +34,6 @@
           guarda solo en tu teléfono.
         </p>
         <button id="btn-request-permissions">Conceder permisos</button>
-
         <p id="permission-denied-hint" class="hint-text hidden">
           El permiso de SMS está desactivado y Android ya no permite
           pedirlo de nuevo desde la app. Toca el botón de abajo para ir
@@ -71,21 +63,18 @@
       </button>
 
       <h2 class="section-title">Por persona</h2>
-      <div class="card">
-        <ul id="contact-list" class="list"></ul>
-      </div>
+      <div class="card"><ul id="contact-list" class="list"></ul></div>
 
-      <!-- Grupos -->
       <h2 class="section-title">Grupos</h2>
-      <div class="card">
-        <ul id="groups-list" class="list"></ul>
-      </div>
+      <div class="card"><ul id="groups-list" class="list"></ul></div>
       <div class="action-row two-col">
         <button id="btn-new-group" class="secondary">+ Nuevo grupo</button>
         <button id="btn-manage-contacts" class="secondary">Gestionar contactos</button>
       </div>
+      <div class="action-row two-col">
+        <button id="btn-reclassify" class="secondary">Reclasificar categoría única</button>
+      </div>
 
-      <!-- Filtro por día -->
       <h2 class="section-title">Buscar por día</h2>
       <div class="card day-filter-row">
         <input id="day-filter-input" type="date" />
@@ -98,7 +87,6 @@
       </div>
     </section>
 
-    <!-- Diálogo modal: "¿Quién es?" -->
     <div id="who-is-modal" class="modal hidden">
       <div class="modal-content">
         <h3>Nueva transferencia detectada</h3>
@@ -111,6 +99,8 @@
           <button data-cat="Cliente">💼 Cliente</button>
         </div>
         <input id="who-is-name" type="text" placeholder="Nombre (ej. María)" />
+        <label class="field-label" for="who-is-group-select">Grupo (opcional)</label>
+        <select id="who-is-group-select"></select>
         <button id="btn-save-contact">Guardar como nuevo contacto</button>
 
         <div id="who-is-associate-row" class="hidden">
@@ -124,7 +114,6 @@
         </div>
 
         <div class="modal-divider"><span>o bien</span></div>
-
         <p class="hint-text">
           Puedes omitir esta transferencia sin catalogarla. "Por ahora"
           la vuelve a preguntar en la próxima actualización; "Siempre"
@@ -137,7 +126,6 @@
       </div>
     </div>
 
-    <!-- Diálogo modal: transacciones de un día concreto -->
     <div id="day-modal" class="modal hidden">
       <div class="modal-content">
         <h3 id="day-modal-title">Transferencias del día</h3>
@@ -146,7 +134,6 @@
       </div>
     </div>
 
-    <!-- Diálogo modal: ajustes -->
     <div id="settings-modal" class="modal hidden">
       <div class="modal-content">
         <h3>Ajustes</h3>
@@ -166,7 +153,6 @@
         </label>
         <input id="settings-catchall-alias" type="text" placeholder="Nombre a mostrar (ej. Negocio)" />
         <input id="settings-catchall-category" type="text" placeholder="Categoría (ej. Negocio)" />
-
         <div class="modal-divider"><span>indexado</span></div>
         <p class="hint-text">
           Ignora cualquier transferencia anterior a esta fecha. Déjalo
@@ -174,13 +160,11 @@
         </p>
         <label class="field-label" for="settings-index-since">Indexar desde</label>
         <input id="settings-index-since" type="date" />
-
         <button id="btn-save-settings">Guardar ajustes</button>
         <button id="btn-close-settings" class="secondary">Cerrar</button>
       </div>
     </div>
 
-    <!-- Diálogo modal: nuevo grupo -->
     <div id="new-group-modal" class="modal hidden">
       <div class="modal-content">
         <h3>Nuevo grupo</h3>
@@ -190,7 +174,6 @@
       </div>
     </div>
 
-    <!-- Diálogo modal: estadísticas de un grupo -->
     <div id="group-stats-modal" class="modal hidden">
       <div class="modal-content">
         <h3 id="group-stats-title">Grupo</h3>
@@ -205,20 +188,49 @@
       </div>
     </div>
 
-    <!-- Diálogo modal: gestionar contactos (asignar grupo, ver tarjetas) -->
+    <!--
+      Requisito: "con 100 usuarios no puedes trabajar con un select
+      por fila, mejor marcar los que quieres y asignarlos a un grupo".
+      Se reemplaza el select por fila por: buscador + checkboxes +
+      "seleccionar todos" + un único botón de asignación masiva.
+    -->
     <div id="contacts-modal" class="modal hidden">
       <div class="modal-content">
         <h3>Contactos</h3>
+        <input id="contacts-search" type="text" placeholder="Buscar por nombre…" />
+        <label class="toggle-row" style="margin:0 0 10px;">
+          <input id="contacts-select-all" type="checkbox" />
+          <span>Seleccionar todos <small id="contacts-selected-count" style="color:var(--text-faint)"></small></span>
+        </label>
         <ul id="contacts-list" class="list"></ul>
+        <div class="modal-divider"><span>asignar seleccionados a un grupo</span></div>
+        <select id="contacts-bulk-group-select"></select>
+        <button id="btn-bulk-assign-group" class="secondary" disabled>Asignar a grupo</button>
         <button id="btn-close-contacts" class="secondary">Cerrar</button>
       </div>
     </div>
 
-    <!-- Diálogo modal: transferencias sin etiquetar, por día y paginadas -->
+    <div id="reclassify-modal" class="modal hidden">
+      <div class="modal-content">
+        <h3>Reclasificar transacciones</h3>
+        <p class="hint-text">
+          Transacciones guardadas bajo la categoría única. Reasígnalas a un
+          contacto específico cuando tengas tiempo.
+        </p>
+        <ul id="reclassify-list" class="list"></ul>
+        <button id="btn-close-reclassify" class="secondary">Cerrar</button>
+      </div>
+    </div>
+
     <div id="pending-modal" class="modal hidden">
       <div class="modal-content">
         <h3>Transferencias sin etiquetar</h3>
-        <input id="pending-day-input" type="date" />
+        <div class="month-nav">
+          <button id="pending-prev-month" class="icon-btn">‹</button>
+          <span id="pending-month-label">—</span>
+          <button id="pending-next-month" class="icon-btn">›</button>
+        </div>
+        <div id="pending-day-chips" class="quick-options"></div>
         <p id="pending-day-summary" class="hint-text"></p>
         <ul id="pending-list" class="list"></ul>
         <div class="pagination-row">
@@ -231,6 +243,6 @@
     </div>
   </div>
 
-  <script type="module" src="/src/main.js"></script>
+  <script type="module" src="src/main.js"></script>
 </body>
 </html>

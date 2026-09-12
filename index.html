@@ -188,10 +188,24 @@
       </div>
     </div>
 
+    <!--
+      Requisito: "con 100 usuarios no puedes trabajar con un select
+      por fila, mejor marcar los que quieres y asignarlos a un grupo".
+      Se reemplaza el select por fila por: buscador + checkboxes +
+      "seleccionar todos" + un único botón de asignación masiva.
+    -->
     <div id="contacts-modal" class="modal hidden">
       <div class="modal-content">
         <h3>Contactos</h3>
+        <input id="contacts-search" type="text" placeholder="Buscar por nombre…" />
+        <label class="toggle-row" style="margin:0 0 10px;">
+          <input id="contacts-select-all" type="checkbox" />
+          <span>Seleccionar todos <small id="contacts-selected-count" style="color:var(--text-faint)"></small></span>
+        </label>
         <ul id="contacts-list" class="list"></ul>
+        <div class="modal-divider"><span>asignar seleccionados a un grupo</span></div>
+        <select id="contacts-bulk-group-select"></select>
+        <button id="btn-bulk-assign-group" class="secondary" disabled>Asignar a grupo</button>
         <button id="btn-close-contacts" class="secondary">Cerrar</button>
       </div>
     </div>

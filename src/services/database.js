@@ -289,6 +289,29 @@ export async function assignContactToGroup(contactId, groupId) {
   });
 }
 
+/**
+ * Asigna un grupo a VARIOS contactos de una sola vez (requisito:
+ * "con 100 usuarios necesito marcar varios y asignarlos a un grupo").
+ * Usa executeSet para mandar todos los UPDATE en una sola transacción,
+ * en vez de 100 llamadas run() por separado.
+ */
+export async function assignContactsToGroup(contactIds, groupId) {
+  if (!contactIds || !contactIds.length) return;
+
+  const set = contactIds.map((id) => ({
+    statement: 'UPDATE contacts SET group_id = ? WHERE id = ?',
+    values: [groupId || null, id]
+  }));
+
+  await sqlite().executeSet({
+    database: DB_NAME,
+    set,
+    transaction: true,
+    readonly: false,
+    returnMode: 'no'
+  });
+}
+
 export async function getGroupSummary(groupId, year, month) {
   const from = `${year}-${String(month).padStart(2, '0')}-01T00:00:00.000Z`;
   const to = new Date(year, month, 1).toISOString();
@@ -553,11 +576,6 @@ export async function setOnboardingCompleted() {
 }
 
 /**
- * FIX: faltaba esta función. src/main.js la importa (para el flujo de
- * "Reclasificar categoría única") pero nunca estuvo definida aquí, lo
- * que rompía el import en tiempo de enlace de módulos ES y dejaba la
- * pantalla completa en negro (bootstrap() nunca llegaba a ejecutarse).
- *
  * A diferencia de findOrCreateCatchAllContact, esta NO crea el
  * contacto si no existe: solo lo busca (o devuelve null).
  */

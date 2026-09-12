@@ -136,9 +136,16 @@ export function extractAccount(text) {
 /**
  * Determina el tipo de identificador (para no confundir cuentas con
  * teléfonos al guardar/mostrar el contacto).
+ *
+ * "WALLET_..." es un identificador SINTÉTICO (no viene del SMS) que
+ * usamos cuando el SMS notifica que el monedero propio del usuario
+ * fue recargado pero NO menciona quién envió el dinero (ver
+ * banks/monedero-recargado.js). Estas operaciones siempre quedan
+ * pendientes para que el usuario decida a quién/qué asignarlas.
  */
 export function identifierType(identifier) {
   if (!identifier) return null;
+  if (identifier.startsWith('WALLET_')) return 'wallet';
   // Teléfono cubano: 8 dígitos (52345678) o con prefijo país, 10 dígitos (5352345678).
   return /^5\d{7}$/.test(identifier) || /^53\d{8}$/.test(identifier) ? 'phone' : 'account';
 }
@@ -156,7 +163,7 @@ export function extractType(text) {
 // --- ¿PARECE UNA TRANSFERENCIA? ---
 // Filtro rápido antes de intentar parsear en profundidad.
 const TRANSFER_HINT_REGEX =
-  /transferenc|saldo|transfer[eé]ncia|pago realizado|has recibido|has enviado|operaci[oó]n|transfermovil|enzona|recarga|monedero|titular del tel[eé]fono/i;
+  /transferenc|saldo|transfer[eé]ncia|pago realizado|has recibido|has enviado|operaci[oó]n|transfermovil|enzona|recarga|monedero|titular del tel[eé]fono|compra del plan/i;
 
 export function looksLikeTransfer(text) {
   return TRANSFER_HINT_REGEX.test(text);
